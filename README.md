@@ -21,6 +21,7 @@ independently of fan control.
 | `scripts/cs` | CLI helper (installed at `/usr/local/bin/cs`): list/attach fleet sessions. |
 | `agentic-fleet-cockpit.service` | systemd unit source: runs the server and owns the boot fleet spawn (`ExecStartPost` starter). |
 | `scripts/install.sh` | Copy-on-change installer for the unit + `cs` (T-603 Option F pattern). |
+| `scripts/smoke.sh` | Read-only post-deploy smoke test: service, UI, fleet API, loopback bind, installed-artifact parity. |
 
 ## Run
 
