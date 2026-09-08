@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Claude Fleet Attach
+Comment=Open terminal windows attached to running Claude fleet tmux sessions (T-091)
+Exec=/opt/055-agentic-fleet-cockpit/scripts/claude-fleet-attach.sh
+Terminal=false
+Hidden=false
+X-GNOME-Autostart-enabled=true

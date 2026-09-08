@@ -1,0 +1,32 @@
+#!/bin/bash
+# cs — Claude fleet session helper (T-091, from the T-041 dispatch).
+# Installed at /usr/local/bin/cs.
+#
+#   cs           list fleet-* sessions on the root tmux server
+#   cs <match>   attach to the first fleet session whose name contains <match>
+
+set -u
+SOCK=/tmp/tmux-0/default
+
+tmx() { env -u TMUX -u TMUX_PANE tmux -S "$SOCK" "$@"; }
+
+sessions=$(tmx list-sessions -F '#{session_name}	#{session_attached}	#{t:session_created}' 2>/dev/null \
+           | grep '^fleet-') || { echo "no fleet sessions running"; exit 1; }
+
+if [ $# -eq 0 ]; then
+    echo "Claude fleet sessions (root tmux server):"
+    while IFS=$'\t' read -r name attached created; do
+        state="detached"; [ "$attached" != "0" ] && state="attached ($attached)"
+        printf '  %-40s %-14s since %s\n' "$name" "$state" "$created"
+    done <<< "$sessions"
+    echo "attach with: cs <match>"
+    exit 0
+fi
+
+match=$(printf '%s\n' "$sessions" | cut -f1 | grep -i -- "$1" | head -1)
+if [ -z "$match" ]; then
+    echo "no fleet session matching '$1'" >&2
+    printf '%s\n' "$sessions" | cut -f1 | sed 's/^/  /' >&2
+    exit 1
+fi
+exec env -u TMUX -u TMUX_PANE tmux -S "$SOCK" attach -t "=$match"

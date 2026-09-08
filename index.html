@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>🤖 Claude Sessions — Fleet</title>
+<style>
+  /* Tokens copied from fan-dashboard.html so both apps read as one suite
+     (the fan dashboard on :8087 links here; this page links back). */
+  :root {
+    --bg:#0f1419; --card:#1a2029; --card2:#222a35; --ink:#e6edf3; --muted:#a8b3c4;
+    --ok:#3fb950; --warn:#e0a32e; --crit:#f85149; --accent:#58a6ff; --line:#2d3742;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0 auto; font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg); color:var(--ink); padding:20px; max-width:1180px;
+  }
+  h1 { font-size:1.5rem; margin:0 0 4px; }
+  .sub { color:var(--muted); font-size:.9rem; margin-bottom:18px; }
+  .navbar { display:flex; gap:8px; align-items:center; margin-bottom:20px; flex-wrap:wrap; }
+  .navbar .seg { display:inline-flex; background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  .navbar a {
+    color:var(--muted); text-decoration:none; padding:9px 18px; font-size:.9rem;
+    font-weight:600; transition:.15s;
+  }
+  .navbar a.active { background:var(--accent); color:#0b0f14; }
+  .navbar a:not(.active):hover { color:var(--ink); background:var(--card2); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin-bottom:14px; }
+  .section-title { font-size:.85rem; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; margin:0 0 12px; }
+  .banner { display:none; margin:0 0 14px; padding:12px 14px; border-radius:8px; font-weight:600; line-height:1.5;
+            border:1px solid var(--crit); background:rgba(248,81,73,.12); color:var(--crit); }
+  .toolbar { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:14px; }
+  .toolbar input[type=text] {
+    background:var(--card2); color:var(--ink); border:1px solid var(--line);
+    border-radius:8px; padding:9px 11px; font-family:inherit; font-size:.9rem; min-width:230px;
+  }
+  .toolbar input:focus { outline:2px solid var(--accent); outline-offset:1px; }
+  .toolbar label { display:inline-flex; gap:7px; align-items:center; font-size:.85rem; color:var(--muted); cursor:pointer; }
+  .toolbar input[type=checkbox] { accent-color:var(--accent); width:15px; height:15px; }
+  .proj { display:grid; grid-template-columns:minmax(180px,230px) 1fr auto; gap:10px 16px;
+          align-items:center; padding:10px 12px; border:1px solid var(--line); border-radius:9px;
+          background:var(--card2); margin-bottom:8px; }
+  @media (max-width:860px){ .proj { grid-template-columns:1fr auto; } .proj .opts { grid-column:1 / -1; } }
+  .proj.running { border-color:rgba(63,185,80,.55); }
+  .pname { font-size:.9rem; font-weight:600; overflow-wrap:anywhere; display:flex; gap:9px;
+           align-items:baseline; flex-wrap:wrap; min-width:0; }
+  .pname small { color:var(--muted); font-weight:400; font-size:.72rem; white-space:nowrap; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--muted); flex:none; align-self:center; }
+  .dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)}
+  .state { font-size:.75rem; color:var(--muted); white-space:nowrap; }
+  .state b { color:var(--ink); font-weight:600; }
+  .opts { display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+  .opts label { display:inline-flex; gap:6px; align-items:center; font-size:.8rem; color:var(--muted); cursor:pointer; white-space:nowrap; }
+  .opts label.on { color:var(--ink); }
+  .opts input[type=checkbox] { accent-color:var(--accent); width:15px; height:15px; margin:0; }
+  .opts select { background:var(--card); color:var(--ink); border:1px solid var(--line);
+                 border-radius:7px; padding:4px 7px; font-family:inherit; font-size:.78rem; }
+  .opts .stub { opacity:.55; }
+  .acts { display:flex; gap:8px; align-items:center; justify-content:flex-end; flex-wrap:wrap; }
+  button {
+    background:var(--accent); color:#0b0f14; border:0; border-radius:9px; padding:8px 15px;
+    font-size:.85rem; font-weight:700; cursor:pointer; transition:.15s;
+  }
+  button.ghost { background:var(--card); color:var(--ink); border:1px solid var(--line); font-weight:600; }
+  button.danger { background:rgba(248,81,73,.16); color:var(--crit); border:1px solid var(--crit); font-weight:600; }
+  button.mini { padding:5px 10px; font-size:.75rem; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  button:hover:not(:disabled) { filter:brightness(1.12); }
+  button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  code { background:var(--card); border:1px solid var(--line); border-radius:4px; padding:2px 6px; font-size:.74rem; }
+  .attach { display:flex; gap:7px; align-items:center; min-width:0; }
+  .attach code { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:340px; }
+  .savebar { position:sticky; bottom:12px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;
+             background:var(--card); border:1px solid var(--line); border-radius:12px; padding:13px 16px;
+             box-shadow:0 6px 24px rgba(0,0,0,.45); }
+  .savemsg { font-size:.85rem; }
+  .savemsg.ok{color:var(--ok)} .savemsg.bad{color:var(--crit)} .savemsg.dirty{color:var(--warn)}
+  .hint { color:var(--muted); font-size:.83rem; line-height:1.5; margin:8px 0 0; }
+  @media (prefers-reduced-motion:reduce){ *{transition:none!important} }
+</style>
+</head>
+<body>
+  <nav class="navbar">
+    <span class="seg">
+      <a href="http://localhost:8087/">🌀 Fans &amp; Temps</a>
+      <a href="http://localhost:8087/voxtype">🎙️ Voxtype</a>
+      <a href="/" class="active">🤖 Claude Sessions</a>
+    </span>
+  </nav>
+
+  <h1>🤖 Claude Sessions</h1>
+  <div class="sub" id="sub">loading…</div>
+
+  <div class="banner" id="banner"></div>
+
+  <div class="card">
+    <p class="section-title">Fleet — /opt projects</p>
+    <div class="toolbar">
+      <input type="text" id="filter" placeholder="filter projects…">
+      <label><input type="checkbox" id="onlyOn"> enabled / running only</label>
+    </div>
+    <div id="list"></div>
+    <p class="hint">
+      Enabled projects auto-start at boot in a detached root tmux session
+      (<code>fleet-&lt;dirname&gt;</code>) running <code>claude-fw -c</code> with a
+      fresh-session fallback. Attach from the desktop with the copy button —
+      closing that terminal window detaches; the session keeps running.
+      “autonomous” is a stub: saved, but no effect yet.
+    </p>
+  </div>
+
+  <div class="savebar">
+    <button id="btnSave">💾 Save config</button>
+    <button class="ghost" id="btnReload">↻ Refresh</button>
+    <span class="savemsg" id="savemsg"></span>
+  </div>
+
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+let FLEET = null;          // last server view
+let CFG = {};              // path -> config being edited
+let CONFIGURED = new Set() // paths present in fleet.json on the server
+let dirty = false;
+
+function setMsg(text, cls) {
+  const el = $('#savemsg');
+  el.textContent = text; el.className = 'savemsg ' + (cls || '');
+}
+
+function markDirty() { dirty = true; setMsg('unsaved changes', 'dirty'); }
+
+async function load(keepEdits) {
+  let r;
+  try { r = await fetch('/api/claude/fleet'); }
+  catch (e) { setMsg('server unreachable', 'bad'); return; }
+  if (r.status === 403) {
+    const err = (await r.json()).error || 'refused';
+    $('#banner').style.display = 'block';
+    $('#banner').textContent = '🔒 ' + err + ' — fleet control is disabled while the ' +
+      'dashboard is exposed beyond localhost (no auth exists).';
+    $('#sub').textContent = 'fleet API disabled';
+    document.querySelectorAll('button, input, select').forEach(el => {
+      if (!['filter','onlyOn'].includes(el.id)) el.disabled = true;
+    });
+    return;
+  }
+  if (!r.ok) { setMsg('fleet API error ' + r.status, 'bad'); return; }
+  FLEET = await r.json();
+  CONFIGURED = new Set(FLEET.projects.filter(p => p.configured).map(p => p.path));
+  if (!keepEdits) {
+    CFG = {};
+    for (const p of FLEET.projects) CFG[p.path] = {...p.config};
+    dirty = false;
+    if ($('#savemsg').classList.contains('dirty')) setMsg('', '');
+  }
+  render();
+}
+
+function render() {
+  if (!FLEET) return;
+  const q = $('#filter').value.trim().toLowerCase();
+  const onlyOn = $('#onlyOn').checked;
+  const list = $('#list');
+  list.textContent = '';
+  let running = 0, enabled = 0, shown = 0;
+
+  for (const p of FLEET.projects) {
+    const c = CFG[p.path] || {...p.config};
+    if (p.running) running++;
+    if (c.enabled) enabled++;
+    if (q && !p.dirname.toLowerCase().includes(q)) continue;
+    if (onlyOn && !c.enabled && !p.running) continue;
+    shown++;
+
+    const row = document.createElement('div');
+    row.className = 'proj' + (p.running ? ' running' : '');
+    row.dataset.path = p.path;
+
+    const name = document.createElement('div');
+    name.className = 'pname';
+    const dot = document.createElement('span');
+    dot.className = 'dot' + (p.running ? (p.attached ? ' ok' : ' warn') : '');
+    dot.title = p.running ? (p.attached ? 'running, attached' : 'running, detached') : 'not running';
+    name.append(dot, document.createTextNode(p.dirname));
+    const st = document.createElement('small');
+    st.textContent = p.running ? (p.attached ? 'running · attached' : 'running · detached') : 'stopped';
+    name.append(st);
+
+    const en = document.createElement('label');
+    en.className = c.enabled ? 'on' : '';
+    en.style.cssText = 'display:inline-flex;gap:6px;align-items:center;font-size:.8rem;cursor:pointer;white-space:nowrap;color:' + (c.enabled ? 'var(--ink)' : 'var(--muted)');
+    const enCb = document.createElement('input');
+    enCb.type = 'checkbox'; enCb.checked = c.enabled;
+    enCb.style.cssText = 'accent-color:var(--accent);width:15px;height:15px;margin:0';
+    enCb.onchange = () => { c.enabled = enCb.checked; CFG[p.path] = c; markDirty(); render(); };
+    en.append(enCb, document.createTextNode('enabled'));
+
+    const opts = document.createElement('div');
+    opts.className = 'opts';
+    const mkOpt = (key, text, title, stub) => {
+      const l = document.createElement('label');
+      if (c[key]) l.classList.add('on');
+      if (stub) l.classList.add('stub');
+      l.title = title;
+      const cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.checked = !!c[key];
+      cb.onchange = () => { c[key] = cb.checked; CFG[p.path] = c; markDirty(); render(); };
+      l.append(cb, document.createTextNode(text));
+      return l;
+    };
+    opts.append(
+      mkOpt('termlink', 'termlink', 'launch with claude-fw --termlink (remote access)'),
+      mkOpt('autorestart', 'autorestart', 'auto-restart on handover signal (off = claude-fw --no-restart)'),
+      mkOpt('autonomous', 'autonomous', 'STUB — saved but has no effect yet', true),
+    );
+    const sel = document.createElement('select');
+    sel.title = 'resume mode';
+    for (const m of FLEET.resume_modes) {
+      const o = document.createElement('option');
+      o.value = m; o.textContent = m; o.selected = (c.resume_mode === m);
+      sel.append(o);
+    }
+    sel.onchange = () => { c.resume_mode = sel.value; CFG[p.path] = c; markDirty(); };
+    opts.append(sel);
+    if (p.running) {
+      const at = document.createElement('span');
+      at.className = 'attach';
+      const code = document.createElement('code');
+      code.textContent = p.attach_cmd; code.title = p.attach_cmd;
+      const cp = document.createElement('button');
+      cp.className = 'ghost mini'; cp.textContent = '📋 copy';
+      cp.onclick = async () => {
+        try { await navigator.clipboard.writeText(p.attach_cmd); cp.textContent = '✓ copied'; }
+        catch (e) { window.prompt('copy attach command:', p.attach_cmd); }
+        setTimeout(() => cp.textContent = '📋 copy', 1500);
+      };
+      at.append(code, cp);
+      opts.append(at);
+    }
+
+    const acts = document.createElement('div');
+    acts.className = 'acts';
+    const btn = document.createElement('button');
+    if (p.running) {
+      btn.className = 'danger mini'; btn.textContent = '⏹ Stop';
+      btn.onclick = () => act('/api/claude/stop', p, btn, 'stopping…');
+    } else {
+      btn.className = 'mini'; btn.textContent = '▶ Start';
+      btn.onclick = () => act('/api/claude/start', p, btn, 'starting…');
+    }
+    acts.append(en, btn);
+
+    row.append(name, opts, acts);
+    list.append(row);
+  }
+  if (!shown) {
+    const d = document.createElement('div');
+    d.className = 'hint'; d.textContent = 'no projects match the filter';
+    list.append(d);
+  }
+  $('#sub').textContent = `${FLEET.projects.length} projects · ${enabled} enabled · ${running} running`;
+}
+
+async function act(url, p, btn, busyText) {
+  btn.disabled = true; const orig = btn.textContent; btn.textContent = busyText;
+  try {
+    const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'},
+                                body: JSON.stringify({project: p.path})});
+    const d = await r.json();
+    if (!d.ok) setMsg((p.dirname + ': ' + (typeof d.result === 'string' ? d.result : JSON.stringify(d.result))), 'bad');
+    else setMsg(p.dirname + ': ' + (url.endsWith('stop') ? 'stopped' : 'started'), 'ok');
+  } catch (e) { setMsg(String(e), 'bad'); }
+  btn.disabled = false; btn.textContent = orig;
+  await load(dirty);   // keep unsaved toggle edits across the refresh
+}
+
+async function save() {
+  // Persist entries that carry information: enabled, non-default options, or
+  // previously stored (so an explicit disable survives).
+  const out = {};
+  const DEF = JSON.stringify({enabled:false, termlink:false, autorestart:true,
+                              resume_mode:'continue-else-fresh', autonomous:false});
+  for (const [path, c] of Object.entries(CFG)) {
+    const norm = {enabled:!!c.enabled, termlink:!!c.termlink, autorestart:!!c.autorestart,
+                  resume_mode:c.resume_mode, autonomous:!!c.autonomous};
+    if (JSON.stringify(norm) !== DEF || CONFIGURED.has(path)) out[path] = norm;
+  }
+  const btn = $('#btnSave'); btn.disabled = true;
+  try {
+    const r = await fetch('/api/claude/config', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({projects: out})});
+    const d = await r.json();
+    if (d.ok) { dirty = false; setMsg('saved (' + d.result.saved + ' project(s) in fleet.json)', 'ok'); }
+    else setMsg('save failed: ' + d.result, 'bad');
+  } catch (e) { setMsg('save failed: ' + e, 'bad'); }
+  btn.disabled = false;
+  await load(dirty);
+}
+
+$('#btnSave').onclick = save;
+$('#btnReload').onclick = () => load(false);
+$('#filter').oninput = render;
+$('#onlyOn').onchange = render;
+load(false);
+setInterval(() => load(dirty), 5000);   // refresh run-state; keep unsaved edits
+</script>
+</body>
+</html>

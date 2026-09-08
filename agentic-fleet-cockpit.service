@@ -1,0 +1,20 @@
+[Unit]
+Description=Agentic Fleet Cockpit — Claude fleet control server + boot spawn
+Documentation=file:/opt/055-agentic-fleet-cockpit/README.md
+After=network.target
+
+[Service]
+Type=simple
+# Runs as root: spawns/kills sessions on the ROOT tmux server. Binds 127.0.0.1
+# only — the fleet API has no auth and refuses to serve off-loopback.
+User=root
+ExecStart=/usr/bin/python3 /opt/055-agentic-fleet-cockpit/cockpit-server.py 8090
+# Claude fleet auto-start (T-089, moved here from fan-dashboard.service in
+# T-092): bring enabled /opt Claude sessions back after boot. Best-effort
+# ('-'): a fleet spawn failure must never take the cockpit server down.
+ExecStartPost=-/opt/055-agentic-fleet-cockpit/scripts/claude-fleet-start.sh --boot
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

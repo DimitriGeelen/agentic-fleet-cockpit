@@ -1,0 +1,4 @@
+# Per-project secrets (OneDev deploy key etc.) — never committed.
+instance/secrets/
+__pycache__/
+*.pyc

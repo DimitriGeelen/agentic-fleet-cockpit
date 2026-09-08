@@ -1,0 +1,11 @@
+{
+ "projects": {
+  "/opt/001-sprechloop": {
+   "enabled": false,
+   "termlink": false,
+   "autorestart": true,
+   "resume_mode": "continue-else-fresh",
+   "autonomous": false
+  }
+ }
+}
