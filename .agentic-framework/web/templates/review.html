@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <title>Review {{ task_id }}</title>
+    <script>
+        (function(){var t=localStorage.getItem('wt-theme');if(t==='dark'||t==='light')document.documentElement.setAttribute('data-theme',t);})();
+    </script>
+    <link rel="stylesheet" href="/static/pico.min.css">
+    <script src="/static/htmx.min.js"></script>
+    <script src="/static/csrf-htmx.js"></script>
+    <!-- T-2074: htmx error→toast handler. Standalone template (doesn't extend base.html)
+         needed its own load — origin T-2063 (Complete button silent 4xx fail). -->
+    <script src="/static/htmx-toast.js"></script>
+    <style>
+        /* Mobile-first: single column, large touch targets */
+        * { box-sizing: border-box; }
+        body {
+            padding: 1rem;
+            font-size: 16px;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        /* Task header */
+        .review-header {
+            margin-bottom: 1.25rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 2px solid var(--pico-muted-border-color);
+        }
+        .review-header h2 {
+            font-size: 1.1rem;
+            margin: 0 0 0.25rem;
+            line-height: 1.3;
+        }
+        .review-meta {
+            font-size: 0.8rem;
+            color: var(--pico-muted-color);
+            display: flex;
+            gap: 0.75rem;
+        }
+
+        /* Progress bar */
+        .ac-progress {
+            margin-bottom: 1rem;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+        .ac-progress-bar {
+            height: 6px;
+            background: var(--pico-muted-border-color);
+            border-radius: 3px;
+            margin-top: 0.3rem;
+            overflow: hidden;
+        }
+        .ac-progress-fill {
+            height: 100%;
+            background: #10b981;
+            border-radius: 3px;
+            transition: width 0.3s ease;
+        }
+
+        /* Tier 0 alert */
+        .tier0-alert {
+            border: 2px solid #ef4444;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            background: #ef444408;
+        }
+        .tier0-alert h3 {
+            font-size: 0.95rem;
+            color: #ef4444;
+            margin: 0 0 0.5rem;
+        }
+        .tier0-risk {
+            font-weight: 700;
+            font-size: 0.9rem;
+            margin-bottom: 0.25rem;
+        }
+        .tier0-command {
+            font-family: monospace;
+            font-size: 0.75rem;
+            background: var(--pico-code-background-color);
+            padding: 0.4rem 0.6rem;
+            border-radius: 4px;
+            word-break: break-all;
+            margin: 0.5rem 0;
+        }
+        .tier0-actions {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 0.75rem;
+        }
+        .tier0-actions button {
+            flex: 1;
+            min-height: 48px;
+            font-size: 1rem;
+            margin: 0;
+        }
+        .btn-approve {
+            background: #10b981;
+            border-color: #10b981;
+            color: white;
+        }
+        .btn-approve:hover { background: #059669; border-color: #059669; }
+        .btn-reject {
+            background: transparent;
+            border: 2px solid #ef4444;
+            color: #ef4444;
+        }
+        .btn-reject:hover { background: #ef444422; }
+        .tier0-feedback {
+            width: 100%;
+            font-size: 0.85rem;
+            min-height: 2.5rem;
+            margin-top: 0.5rem;
+            resize: vertical;
+        }
+
+        /* AC cards */
+        .ac-card {
+            border: 1px solid var(--pico-muted-border-color);
+            border-radius: 8px;
+            padding: 0.75rem 1rem;
+            margin-bottom: 0.75rem;
+            background: var(--pico-card-background-color);
+        }
+        .ac-card.checked {
+            opacity: 0.55;
+            border-color: #10b98155;
+        }
+        .ac-card-header {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.5rem;
+            font-size: 0.9rem;
+            line-height: 1.4;
+        }
+        .ac-card-header .ac-check {
+            flex-shrink: 0;
+            margin-top: 0.1rem;
+        }
+
+        /* Confidence badges */
+        .confidence-badge {
+            display: inline-block;
+            font-size: 0.6rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            padding: 0.1rem 0.35rem;
+            border-radius: 3px;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .badge-review { background: #f59e0b22; color: #b45309; border: 1px solid #f59e0b55; }
+        .badge-rubber-stamp { background: #10b98122; color: #047857; border: 1px solid #10b98155; }
+
+        /* AC detail (steps, expected, if-not) */
+        .ac-detail {
+            padding: 0.5rem 0 0 1.75rem;
+            font-size: 0.8rem;
+            line-height: 1.5;
+        }
+        .ac-detail strong {
+            display: block;
+            margin-top: 0.4rem;
+            margin-bottom: 0.1rem;
+        }
+        .ac-detail ol {
+            margin: 0 0 0.3rem 1.25rem;
+            padding: 0;
+        }
+        .ac-detail .if-not {
+            color: var(--pico-muted-color);
+        }
+        /* T-1575 codification: backticked URLs render as <a><code></code></a>.
+           Without explicit styling, the <code> background obscures the link
+           affordance — make the link colour and underline visible across the
+           whole code box so the human can see it's clickable. */
+        .ac-detail a > code,
+        .rec-rationale a > code,
+        .rec-evidence a > code,
+        .rec-other a > code {
+            color: #2563eb;
+            text-decoration: underline;
+            background: #eff6ff;
+        }
+        .ac-detail a:hover > code,
+        .rec-rationale a:hover > code,
+        .rec-evidence a:hover > code,
+        .rec-other a:hover > code {
+            background: #dbeafe;
+        }
+
+        /* T-1765: Pico CSS sets `code, kbd { display: inline-block }`. Inline-
+           block elements are atomic — when they don't fit on a line, the
+           browser drops the WHOLE element to the next line instead of breaking
+           inside it. For long paths like `lib/task_pair_acd.sh` in prose,
+           this looks like the path got "cutoff" / dropped from its sentence.
+           Restore inline display so paths flow with text and break naturally
+           where needed. `overflow-wrap: anywhere` lets long unbroken tokens
+           break at any character if a line really can't hold them. Apply to
+           every prose context that renders backticked paths or commands. */
+        .ac-detail code,
+        .rec-rationale code,
+        .rec-evidence code,
+        .rec-other code {
+            display: inline;
+            overflow-wrap: anywhere;
+            word-break: normal;
+        }
+
+        /* Action button (check/uncheck) */
+        .ac-action-btn {
+            width: 100%;
+            min-height: 48px;
+            font-size: 0.95rem;
+            margin-top: 0.5rem;
+        }
+        .ac-action-btn.uncheck {
+            background: transparent;
+            border: 1px solid var(--pico-muted-border-color);
+            color: var(--pico-muted-color);
+        }
+
+        /* Complete task button */
+        .complete-section {
+            margin-top: 1.25rem;
+            padding-top: 1rem;
+            border-top: 2px solid #10b981;
+        }
+        .complete-btn {
+            width: 100%;
+            min-height: 56px;
+            font-size: 1.1rem;
+            font-weight: 700;
+            background: #10b981;
+            border-color: #10b981;
+            color: white;
+        }
+        .complete-btn:hover { background: #059669; border-color: #059669; }
+
+        /* T-1574: Inception decide UI (replaces Complete button on inception tasks) */
+        .decide-section { margin-top: 1.25rem; padding-top: 1rem; border-top: 2px solid #10b981; }
+        .decide-section h3 { margin: 0 0 0.5rem 0; font-size: 1rem; }
+        .decide-section textarea {
+            width: 100%; min-height: 80px; font-size: 0.95rem;
+            padding: 0.5rem; margin-bottom: 0.75rem;
+            border: 1px solid var(--pico-muted-border-color); border-radius: 4px;
+            font-family: inherit;
+        }
+        .decide-buttons { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem; }
+        .decide-btn {
+            min-height: 56px; font-size: 1rem; font-weight: 700;
+            border-radius: 4px; cursor: pointer; color: white;
+        }
+        .decide-btn-go { background: #10b981; border: 2px solid #10b981; }
+        .decide-btn-go:hover { background: #059669; }
+        .decide-btn-nogo { background: #ef4444; border: 2px solid #ef4444; }
+        .decide-btn-nogo:hover { background: #dc2626; }
+        .decide-btn-defer { background: #6b7280; border: 2px solid #6b7280; }
+        .decide-btn-defer:hover { background: #4b5563; }
+        .decide-error { color: var(--pico-del-color); margin-top: 0.5rem; min-height: 1.25rem; }
+
+        /* Artifacts */
+        .artifacts-section {
+            margin-top: 1.25rem;
+            padding-top: 0.75rem;
+            border-top: 1px solid var(--pico-muted-border-color);
+        }
+        .artifacts-section h4 {
+            font-size: 0.85rem;
+            margin: 0 0 0.5rem;
+            color: var(--pico-muted-color);
+        }
+        .artifacts-section a {
+            display: block;
+            font-size: 0.8rem;
+            padding: 0.3rem 0;
+        }
+
+        /* Status badges */
+        .status-badge {
+            display: inline-block;
+            font-size: 0.65rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            padding: 0.1rem 0.4rem;
+            border-radius: 3px;
+        }
+        .badge-startedwork { background: #3b82f622; color: #1d4ed8; border: 1px solid #3b82f655; }
+        .badge-workcompleted { background: #10b98122; color: #047857; border: 1px solid #10b98155; }
+
+        /* T-1195: Recommendation block (T-1539: per-verdict colour) */
+        .recommendation-block {
+            background: #fefce8;
+            border: 1px solid #eab308;
+            border-left: 4px solid #ca8a04;
+            border-radius: 6px;
+            padding: 1rem;
+            margin: 1rem 0;
+        }
+        .recommendation-block[data-verdict="GO"] {
+            background: #ecfdf5;
+            border-color: #10b981;
+            border-left-color: #047857;
+        }
+        .recommendation-block[data-verdict="GO"] h3 { color: #065f46; }
+        .recommendation-block[data-verdict="DEFER"] {
+            background: #fff7ed;
+            border-color: #fb923c;
+            border-left-color: #ea580c;
+        }
+        .recommendation-block[data-verdict="DEFER"] h3 { color: #9a3412; }
+        .recommendation-block[data-verdict="NO-GO"] {
+            background: #fef2f2;
+            border-color: #ef4444;
+            border-left-color: #b91c1c;
+        }
+        .recommendation-block[data-verdict="NO-GO"] h3 { color: #991b1b; }
+        /* T-1578: NO-REC banner — agent owes a recommendation. Cyan theme parity
+           with cockpit pill / approvals filter button. */
+        .recommendation-block[data-verdict="NO-REC"] {
+            background: #0e74901a;
+            border-color: #0e7490;
+            border-left-color: #0e7490;
+        }
+        .recommendation-block[data-verdict="NO-REC"] h3 { color: #155e75; }
+        .recommendation-block h3 {
+            margin: 0 0 0.5rem;
+            font-size: 0.9rem;
+            color: #854d0e;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .recommendation-block pre {
+            margin: 0;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            font-size: 0.9rem;
+            line-height: 1.4;
+            color: #1f2937;
+        }
+        /* T-1575: structured rendering — Rationale + Evidence as separate labeled sections */
+        /* T-3252: Other — everything the tokenizer found that isn't rationale/evidence/verdict,
+           rendered rather than silently dropped. Same visual family, slightly muted since it's
+           recovered/uncategorised text rather than the agent's structured advisory. */
+        .rec-rationale, .rec-evidence, .rec-other { margin-top: 0.5rem; font-size: 0.92rem; line-height: 1.5; color: #1f2937; }
+        .rec-rationale h4, .rec-evidence h4, .rec-other h4 {
+            margin: 0 0 0.25rem; font-size: 0.78rem;
+            text-transform: uppercase; letter-spacing: 0.05em; color: #4b5563;
+        }
+        .rec-rationale p, .rec-evidence p, .rec-other p { margin: 0 0 0.4rem; }
+        .rec-evidence ul, .rec-other ul { margin: 0 0 0.4rem; padding-left: 1.25rem; }
+        .rec-evidence li, .rec-other li { margin-bottom: 0.2rem; }
+        .rec-rationale a, .rec-evidence a, .rec-other a { color: #2563eb; text-decoration: underline; }
+        .rec-rationale code, .rec-evidence code, .rec-other code {
+            background: rgba(0,0,0,0.06); padding: 0.05rem 0.3rem; border-radius: 3px;
+            font-size: 0.88rem;
+        }
+        .rec-other { border-top: 1px dashed #d1d5db; padding-top: 0.5rem; color: #4b5563; }
+        .rec-incomplete-warning {
+            background: #fffbeb; border-left: 4px solid #f59e0b;
+            padding: 0.5rem 0.75rem; margin-top: 0.5rem; border-radius: 4px;
+            font-size: 0.85rem; color: #92400e;
+        }
+        .recommendation-empty {
+            background: #f3f4f6;
+            border: 1px dashed #9ca3af;
+            border-radius: 6px;
+            padding: 0.75rem;
+            margin: 1rem 0;
+            font-size: 0.85rem;
+            color: #6b7280;
+        }
+        .recommendation-empty a { color: #2563eb; text-decoration: underline; }
+
+        /* T-1583: Reviewer Verdict block — independent mechanical second opinion.
+           Cross-surface parity with /approvals card (F3 / T-1569). Distinct from
+           the agent's Recommendation: the reviewer is a static-scan agent, not
+           the same agent that authored the task. */
+        .reviewer-verdict-block {
+            border-radius: 8px;
+            padding: 0.75rem 1rem;
+            margin: 0.75rem 0 1rem 0;
+            border: 1px solid var(--pico-muted-border-color);
+            background: var(--pico-card-background-color);
+        }
+        .reviewer-verdict-block h4 {
+            margin: 0 0 0.4rem 0;
+            font-size: 0.9rem;
+            font-weight: 600;
+            text-transform: none;
+        }
+        .reviewer-verdict-block .reviewer-meta {
+            font-size: 0.8rem;
+            color: var(--pico-muted-color);
+        }
+        .reviewer-verdict-block[data-reviewer-overall="PASS"] {
+            background: #ecfdf5;
+            border-color: #10b981;
+        }
+        .reviewer-verdict-block[data-reviewer-overall="PASS"] h4 { color: #065f46; }
+        .reviewer-verdict-block[data-reviewer-overall="FAIL"] {
+            background: #fef2f2;
+            border-color: #dc2626;
+        }
+        .reviewer-verdict-block[data-reviewer-overall="FAIL"] h4 { color: #991b1b; }
+        .reviewer-verdict-block[data-reviewer-overall="WARN"] {
+            background: #fffbeb;
+            border-color: #f59e0b;
+        }
+        .reviewer-verdict-block[data-reviewer-overall="WARN"] h4 { color: #92400e; }
+        .reviewer-verdict-block .needs-human-flag {
+            display: inline-block;
+            margin-left: 0.4rem;
+            padding: 0.1rem 0.4rem;
+            border-radius: 4px;
+            background: #fde68a;
+            color: #78350f;
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+
+        /* ── Toast notifications (T-1582) ─────────────────────── */
+        /* /review is a standalone template (T-1453) so it does not inherit
+           base.html's htmx-error→toast handler. Mirror it locally so 4xx/5xx
+           responses do not silently disappear (T-1574 follow-up). */
+        .wt-toast {
+            pointer-events: auto;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            max-width: 22rem;
+            animation: toast-in 0.2s ease-out;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        }
+        .wt-toast.success { background: #1b5e20; color: #fff; }
+        .wt-toast.error   { background: #c62828; color: #fff; }
+        .wt-toast.info    { background: #2563eb; color: #fff; }
+        @keyframes toast-in  { from { opacity: 0; transform: translateX(1rem); } to { opacity: 1; transform: none; } }
+        @keyframes toast-out { from { opacity: 1; } to { opacity: 0; transform: translateX(1rem); } }
+    </style>
+</head>
+<body class="review-page">
+
+    <!-- Task header -->
+    <div class="review-header">
+        <h2>{{ task_id }}: {{ task_name }}</h2>
+        <div class="review-meta">
+            <span class="status-badge badge-{{ task_status|replace('-','') }}">{{ task_status }}</span>
+            <span>Owner: {{ task_owner }}</span>
+            {# T-2624 read-value wiring: this review IS the tl_human_review stage of the
+               task-lifecycle map. Bare ?load (no v=) resolves server-latest; the T-2599
+               302 mints the nonce. #}
+            <span><a href="/designer/app?load=%2Fapi%2Fversion%3Fid%3Daef-task-lifecycle"
+                     title="aef-task-lifecycle — this page is the tl_human_review stage">workflow map</a></span>
+        </div>
+    </div>
+
+    <!-- T-1195/T-1575: Recommendation block — structured rendering (verdict + rationale + evidence) -->
+    {# T-1539: data-verdict drives per-verdict colour (CSS attribute selectors above) #}
+    {# T-1575: rec_complete=true only when verdict AND rationale present. Verdict-only blocks
+       render the warning instead of the green GO badge — can't claim a recommendation exists
+       if the rationale is missing. #}
+    {% if rec_complete %}
+    <section class="recommendation-block" data-verdict="{{ verdict|default('?') }}">
+        <h3>Recommendation{% if verdict and verdict != '?' %} — {{ verdict }}{% endif %}{% if rec_verdict_note %} — {{ rec_verdict_note }}{% endif %}</h3>
+        {% if rec_rationale_html %}
+        <div class="rec-rationale">
+            <h4>Rationale</h4>
+            {{ rec_rationale_html | safe }}
+        </div>
+        {% endif %}
+        {% if rec_evidence_html %}
+        <div class="rec-evidence">
+            <h4>Evidence</h4>
+            {{ rec_evidence_html | safe }}
+        </div>
+        {% endif %}
+        {# T-3252: everything the tokenizer found that isn't rationale/evidence/verdict
+           — an author's own bold-labeled span, text before the first marker — is
+           real content, not noise; render it rather than leave it in the unrendered
+           `raw` field. #}
+        {% if rec_other_html %}
+        <div class="rec-other">
+            <h4>Other</h4>
+            {{ rec_other_html | safe }}
+        </div>
+        {% endif %}
+    </section>
+    {% elif verdict and verdict != '?' %}
+    <section class="recommendation-block" data-verdict="{{ verdict }}">
+        <h3>Recommendation{% if verdict %} — {{ verdict }}{% endif %}{% if rec_verdict_note %} — {{ rec_verdict_note }}{% endif %}</h3>
+        <div class="rec-incomplete-warning">
+            ⚠ Verdict recorded as <strong>{{ verdict }}</strong> but the rationale is missing.
+            A recommendation without a rationale cannot be acted on — ask the agent to fill the
+            <code>**Rationale:**</code> line in the <code>## Recommendation</code> section.
+        </div>
+        {% if rec_other_html %}
+        <div class="rec-other">
+            <h4>Other</h4>
+            {{ rec_other_html | safe }}
+        </div>
+        {% endif %}
+    </section>
+    {# T-1578: NO-REC banner — agent has not yet written a `## Recommendation` block.
+       Same cyan theme (#0e7490) as cockpit pill and /approvals filter button. Ranks
+       above the artifacts-only fallback so "this isn't ready for review" is the
+       primary signal, even when research artifacts exist. #}
+    {% elif state == 'NO-REC' %}
+    <section class="recommendation-block recommendation-norec" data-verdict="NO-REC" data-state="NO-REC">
+        <h3>Recommendation — NO-REC</h3>
+        <div>
+            The agent has not yet written a <code>## Recommendation</code> block for this task.
+            The task isn't ready for review — ask the agent to add a recommendation
+            (<strong>GO</strong> / <strong>NO-GO</strong> / <strong>DEFER</strong>) with rationale and evidence
+            before deciding.
+        </div>
+    </section>
+    {# T-3252: the section has content but no structured verdict/rationale was
+       parseable (e.g. free-form prose, an informal token like "SHIP"/"DROP",
+       or a stray block pasted under the wrong heading) — show what's there
+       rather than rendering nothing at all, which is how this class of loss
+       stayed invisible. #}
+    {% elif rec_other_html %}
+    <section class="recommendation-block recommendation-other-only" data-verdict="?" data-state="?">
+        <h3>Recommendation — unparsed</h3>
+        <div class="rec-incomplete-warning">
+            ⚠ No structured <code>**Recommendation:** GO/NO-GO/DEFER</code> line found, but
+            this section contains author text — shown below rather than silently discarded.
+        </div>
+        <div class="rec-other">
+            {{ rec_other_html | safe }}
+        </div>
+    </section>
+    {% elif artifacts %}
+    <section class="recommendation-empty">
+        No recommendation recorded yet. Open the research artifact:
+        {% for art in artifacts %}
+        <a href="/file/{{ art.path }}">{{ art.name }}</a>{% if not loop.last %},{% endif %}
+        {% endfor %}
+    </section>
+    {% endif %}
+
+    {# T-1583: Reviewer Verdict — cross-surface parity with /approvals F3 (T-1569).
+       Silently absent when no `## Reviewer Verdict` block exists in the body
+       (pre-v1.4 tasks). Distinct CSS class so the visual separation between
+       agent's recommendation and reviewer's mechanical verdict is clear. #}
+    {% if reviewer and reviewer.overall %}
+    <section class="reviewer-verdict-block" data-reviewer-overall="{{ reviewer.overall }}">
+        <h4>Reviewer — {{ reviewer.overall }}{% if reviewer.needs_human %}<span class="needs-human-flag">needs human</span>{% endif %}</h4>
+        <div class="reviewer-meta">
+            {% if reviewer.findings == 0 %}No findings.{% else %}{{ reviewer.findings }} finding{{ 's' if reviewer.findings != 1 else '' }} — see <a href="/tasks/{{ task_id }}#reviewer-verdict">full Reviewer block</a>.{% endif %}
+        </div>
+    </section>
+    {% endif %}
+
+    {# T-1810: flash banners — success/error from POST /review/<id>/pause/<id>/resolve #}
+    {% if resolved_flash %}
+    <div class="wt-toast info" style="position:relative;margin:0.75rem 0;padding:0.75rem 1rem;background:#1f3a2a;border:1px solid #10b981;border-radius:4px;color:#d1fae5;">
+        Paused dispatch resolved — new dispatch <code>{{ resolved_flash }}</code> fired.
+    </div>
+    {% endif %}
+    {% if resolve_error %}
+    <div class="wt-toast error" style="position:relative;margin:0.75rem 0;padding:0.75rem 1rem;background:#3a1f1f;border:1px solid #ef4444;border-radius:4px;color:#fecaca;">
+        Resolve failed — {{ resolve_error }}
+    </div>
+    {% endif %}
+
+    {# T-1810: paused-dispatch panel — web parity for `fw pause resolve`.
+       Only renders when this task has paused dispatches awaiting resolution.
+       Slice-5 forward-compat: rows with a matching `retry_of_dispatch_id`
+       are filtered out automatically by `list_paused_dispatches_for_task`. #}
+    {% if paused_dispatches %}
+    <section class="paused-dispatches" style="margin:1.25rem 0;padding:1rem;border:2px solid #f59e0b;border-radius:6px;background:#1f1a0e;">
+        <h3 style="margin:0 0 0.75rem 0;color:#fbbf24;">Paused Dispatches — Worker awaits your answer</h3>
+        {% for pd in paused_dispatches %}
+        <div class="paused-row" style="padding:0.75rem;margin-bottom:0.75rem;background:#0f0f12;border:1px solid #444;border-radius:4px;">
+            <div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.5rem;">
+                {% if pd.severity == 'high' %}
+                <span style="background:#ef4444;color:#fff;padding:0.1rem 0.5rem;border-radius:3px;font-size:0.75rem;font-weight:bold;">HIGH</span>
+                {% elif pd.severity == 'medium' %}
+                <span style="background:#f59e0b;color:#000;padding:0.1rem 0.5rem;border-radius:3px;font-size:0.75rem;font-weight:bold;">MED</span>
+                {% elif pd.severity == 'low' %}
+                <span style="background:#6b7280;color:#fff;padding:0.1rem 0.5rem;border-radius:3px;font-size:0.75rem;">LOW</span>
+                {% else %}
+                <span style="background:#374151;color:#fff;padding:0.1rem 0.5rem;border-radius:3px;font-size:0.75rem;">?</span>
+                {% endif %}
+                <code style="font-size:0.85rem;color:#9ca3af;">{{ pd.dispatch_id_short }}</code>
+                <span style="font-size:0.85rem;color:#9ca3af;">{{ pd.age_label }} ago</span>
+                {% if pd.worker_kind %}<span style="font-size:0.85rem;color:#9ca3af;">· {{ pd.worker_kind }}</span>{% endif %}
+            </div>
+            <div style="margin-bottom:0.75rem;font-size:0.95rem;line-height:1.4;">
+                <strong style="color:#fbbf24;">Q:</strong> {{ pd.question_display }}
+            </div>
+            <form method="POST" action="/review/{{ task_id }}/pause/{{ pd.dispatch_id }}/resolve" style="display:flex;flex-direction:column;gap:0.5rem;">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <textarea name="answer" required minlength="1" rows="3"
+                          placeholder="Your answer to this question — will be passed verbatim to the new Worker"
+                          style="width:100%;padding:0.5rem;background:#1a1a1f;color:#e5e7eb;border:1px solid #555;border-radius:3px;font-family:inherit;font-size:0.9rem;"></textarea>
+                <div style="display:flex;justify-content:flex-end;">
+                    <button type="submit" style="padding:0.4rem 1rem;background:#10b981;color:#000;border:none;border-radius:3px;font-weight:bold;cursor:pointer;">
+                        Resolve &amp; re-dispatch
+                    </button>
+                </div>
+            </form>
+        </div>
+        {% endfor %}
+    </section>
+    {% endif %}
+
+    <!-- Tier 0 approvals (if any pending) -->
+    {% for item in pending_tier0 %}
+    <div class="tier0-alert">
+        <h3>Tier 0 Approval Required</h3>
+        <div class="tier0-risk">{{ item.risk }}</div>
+        <div class="tier0-command">{{ item.command_preview }}</div>
+        <form hx-post="/api/approvals/decide" hx-target="#tier0-result-{{ loop.index }}" hx-swap="innerHTML">
+            <input type="hidden" name="command_hash" value="{{ item.command_hash }}">
+            <textarea name="feedback" class="tier0-feedback" placeholder="Optional feedback..."></textarea>
+            <div class="tier0-actions">
+                <button type="submit" name="decision" value="approved" class="btn-approve">Approve</button>
+                <button type="submit" name="decision" value="rejected" class="btn-reject">Reject</button>
+            </div>
+        </form>
+        <div id="tier0-result-{{ loop.index }}"></div>
+    </div>
+    {% endfor %}
+
+    <!-- Human ACs with polling
+         hx-target="this" override required — base.html sets body-level hx-target="#content",
+         which would otherwise swap the AC fragment into the whole content area (T-2060). -->
+    <div id="ac-container"
+         hx-get="/review/{{ task_id }}/acs"
+         hx-trigger="every 5s"
+         hx-target="this"
+         hx-swap="innerHTML">
+        {% include '_review_acs.html' %}
+    </div>
+
+    <!-- Research artifacts -->
+    {% if artifacts %}
+    <div class="artifacts-section">
+        <h4>Research Artifacts</h4>
+        {% for a in artifacts %}
+        <a href="/file/{{ a.path }}" target="_blank">{{ a.name }}</a>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Toast container + showToast helper (T-1582, T-1574 follow-up).
+         T-2119 (2026-05-30): inline htmx:responseError + htmx:sendError listeners
+         removed — web/static/htmx-toast.js (loaded in <head>) now owns wiring.
+         Inline showToast STAYS so htmx-toast.js's getShowToast() picks it up via
+         window.showToast and uses this CSS-styled implementation in preference
+         to its minimal fallback. Closes the double-toast regression T-2074
+         introduced (its init() wired a second listener pair on top of these). -->
+    <div id="toast-container" style="position:fixed;top:1rem;right:1rem;z-index:9999;display:flex;flex-direction:column;gap:0.5rem;pointer-events:none;"></div>
+    <script>
+        function showToast(msg, type) {
+            type = type || 'info';
+            var container = document.getElementById('toast-container');
+            if (!container) return;
+            var toast = document.createElement('div');
+            toast.className = 'wt-toast ' + type;
+            toast.textContent = msg;
+            container.appendChild(toast);
+            setTimeout(function() {
+                toast.style.animation = 'toast-out 0.3s ease-in forwards';
+                setTimeout(function() { toast.remove(); }, 300);
+            }, 3000);
+        }
+        /* htmx:responseError + htmx:sendError listeners → web/static/htmx-toast.js (T-2074, T-2119). */
+    </script>
+
+</body>
+</html>

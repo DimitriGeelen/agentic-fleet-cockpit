@@ -1,0 +1,129 @@
+<div class="page-header">
+    <h1>{{ page_title }}</h1>
+    <p>{{ learnings|length }} learnings and {{ practices|length }} practices from project experience.</p>
+</div>
+
+<!-- Learnings section -->
+<style>
+    /* T-2044: bound rendered height — the learnings table grows unbounded as learnings
+       accumulate (67k px). Same table class as T-2039 /fabric: a max-height scroll
+       container with sticky header keeps every row in the DOM, reached by internal scroll. */
+    .learnings-table-scroll {
+        max-height: calc(100vh - 280px);
+        min-height: 240px;
+        overflow-y: auto;
+        border: 1px solid var(--pico-muted-border-color);
+        border-radius: var(--pico-border-radius);
+    }
+    .learnings-table-scroll table { margin-bottom: 0; }
+    .learnings-table-scroll thead th {
+        position: sticky;
+        top: 0;
+        background: var(--pico-card-background-color);
+        z-index: 2;
+    }
+</style>
+<details open>
+    <summary><strong>Learnings ({{ learnings|length }})</strong></summary>
+    {% if learnings %}
+    <div class="learnings-table-scroll">
+    <table role="grid">
+        <thead>
+            <tr>
+                <th scope="col">ID</th>
+                <th scope="col">Learning</th>
+                <th scope="col">Source</th>
+                <th scope="col">Task</th>
+                <th scope="col">Date</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for l in learnings %}
+            <tr>
+                <td><code>{{ l.id }}</code></td>
+                <td>
+                    {{ l.learning }}
+                    {% if l.context %}
+                    <br><small class="text-muted">{{ l.context }}</small>
+                    {% endif %}
+                </td>
+                <td><small>{{ l.source | default('') }}</small></td>
+                <td>{% if l.task %}<code>{{ l.task }}</code>{% endif %}</td>
+                <td><small>{{ l.date | default('') }}</small></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div><!-- /learnings-table-scroll (T-2044) -->
+    {% else %}
+    <p class="text-muted italic">No learnings recorded yet.</p>
+    {% endif %}
+</details>
+
+<!-- Patterns link (moved to dedicated page) -->
+<p class="mt-2">
+    <a href="/patterns" hx-target="#content" hx-swap="innerHTML" hx-push-url="true">
+        View all {{ patterns.failure|length + patterns.success|length + patterns.workflow|length }} patterns &rarr;
+    </a>
+</p>
+
+<!-- Practices section -->
+<details>
+    <summary><strong>Practices ({{ practices|length }})</strong></summary>
+    {% if practices %}
+    {% for p in practices %}
+    <article style="margin-bottom: 0.5rem;">
+        <header>
+            <code>{{ p.id }}</code> &mdash; {{ p.name }}
+            <span style="float: right; color: var(--pico-muted-color); font-size: 0.8rem;">
+                {{ p.status | default("active") }}
+                {% if p.applications %} | {{ p.applications }} applications{% endif %}
+            </span>
+        </header>
+        <p>{{ p.description }}</p>
+        {% if p.anti_pattern %}
+        <p style="color: #c0392b; font-size: 0.875rem;"><strong>Anti-pattern:</strong> {{ p.anti_pattern }}</p>
+        {% endif %}
+        <p class="text-muted text-sm">
+            Derived from: <code>{{ p.derived_from if p.derived_from is string else p.derived_from | join(', ') }}</code>
+            {% if p.origin_task %} | Origin: <code>{{ p.origin_task }}</code>{% endif %}
+            {% if p.origin_date %} | {{ p.origin_date }}{% endif %}
+        </p>
+    </article>
+    {% endfor %}
+    {% else %}
+    <p class="text-muted italic">No practices recorded yet.</p>
+    {% endif %}
+</details>
+<!-- Received learnings (T-1218) — cross-project mirror written by T-1217's subscriber -->
+{% if received_learnings %}
+<details>
+    <summary><strong>Received from peers ({{ received_learnings|length }})</strong></summary>
+    <table role="grid">
+        <thead>
+            <tr>
+                <th scope="col">Origin</th>
+                <th scope="col">ID</th>
+                <th scope="col">Learning</th>
+                <th scope="col">Task</th>
+                <th scope="col">Source</th>
+                <th scope="col">Date</th>
+                <th scope="col">Received</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in received_learnings %}
+            <tr>
+                <td><code>{{ r.origin_project }}</code></td>
+                <td><code>{{ r.learning_id }}</code></td>
+                <td>{{ r.learning }}</td>
+                <td>{% if r.task %}<code>{{ r.task }}</code>{% endif %}</td>
+                <td><small>{{ r.source | default('') }}</small></td>
+                <td><small>{{ r.date | default('') }}</small></td>
+                <td><small>{{ r.received_at | default('') }}</small></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</details>
+{% endif %}

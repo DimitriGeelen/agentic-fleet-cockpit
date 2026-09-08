@@ -1,0 +1,83 @@
+---
+id: T-002
+name: "First governed commit for 055-agentic-fleet-cockpit"
+description: >
+  Make a small change (fix a typo, update a comment, add a .gitignore entry) and commit
+  it using the framework's git agent. This validates the full commit flow: task reference,
+  commit-msg hook, post-commit advisory.
+status: captured
+workflow_type: build
+owner: agent
+horizon: now
+tags: [onboarding]
+components: []
+related_tasks: []
+created: 2026-09-08T18:03:51Z
+last_update: 2026-09-08T18:03:51Z
+date_finished: null
+---
+
+# T-002: First governed commit for 055-agentic-fleet-cockpit
+
+## Context
+
+Make any small change and commit it through the framework. The commit-msg hook will validate the task reference. This proves the governance loop works end to end.
+
+**Note:** Do not add `.context/` or `.tasks/` to `.gitignore` — these are managed by the framework and may need to be committed (e.g., handovers). Safe changes: fix a typo in README, add a code comment, or add build artifacts to `.gitignore`.
+
+## For the Operator
+
+**What is happening:** the agent makes a deliberately small, safe change to
+055-agentic-fleet-cockpit and commits it through the framework's git hooks. Small on purpose — the
+point is to exercise the path, not to change anything you care about.
+
+**Why it matters to you:** note the message format, `T-002: description`. That prefix is
+enforced; a hook refuses commits without it. From here on, `git log` answers *why does this
+line exist* by pointing at a task file that still holds the reasoning, the acceptance
+criteria, and the decisions. On an existing codebase you will have two eras in your
+history — before and after this commit. Only the second one is self-explaining.
+
+**What you can do meanwhile:** nothing required. If the agent proposes a change you would
+rather it not touch, say so — "small and safe" is its judgement, and yours overrides.
+
+**Go deeper:** `fw corpus explain aef-task-lifecycle` — the states a task moves through, and
+which gates guard each transition.
+
+## Acceptance Criteria
+
+### Agent
+- [ ] Make a small, safe change to 055-agentic-fleet-cockpit (typo fix, comment, .gitignore)
+- [ ] Commit using `fw git commit -m "T-002: description"`
+- [ ] Commit succeeds (hook validates T-002 reference)
+
+## Verification
+
+# Some commit in history references this task.
+#
+# NOT `git log -1 --format=%s` alone (T-2996 / G-006): that asserts a property
+# of HEAD, true the moment this task completes and false from the very next
+# commit onward -- a permanently-red CTL-013 in every project built on AEF,
+# clearable by nothing, because the work it checks is correct and the question
+# is wrong.
+#
+# NO PIPE AT ALL, deliberately (L-387 + T-2743). The obvious repair is
+# `out=$(git log --format=%s); echo "$out" | grep -q "T-XXX"`, and it is still
+# wrong: that form is SIGPIPE-free only while the capture fits the 65536-byte
+# pipe buffer. This framework's own log is 608KB, and the repaired line exited
+# 141 under P-011 on the first run. A fresh consumer would not hit it; a mature
+# one would -- which is the same "goes red later" shape as the original defect.
+#
+# `git log --grep` filters inside git, so nothing is piped and nothing can
+# SIGPIPE, at any history length. `-1` bounds git's own output AFTER filtering,
+# so this is still a search over all history, not a check on HEAD.
+# ANCHORED, and the subject compared explicitly (T-2999). `git log --grep`
+# searches the whole commit MESSAGE, subject and body -- so an unanchored
+# pattern passes on any commit that merely mentions this task id in its body,
+# and --format then prints THAT commit's subject, which belongs to someone
+# else. Observed in a consumer repo: --grep=T-003 selected
+# "T-016: close onboarding gate, complete T-013, add T-015".
+#
+# The property both halves of this line mean is "a commit whose SUBJECT is this
+# task". A bare -n test cannot express it: it only asks whether anything
+# printed at all.
+s=$(git log --grep='^T-002:' -1 --format=%s); [ "${s%%:*}" = "T-002" ]

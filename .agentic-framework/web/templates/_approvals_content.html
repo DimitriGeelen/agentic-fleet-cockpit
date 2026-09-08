@@ -1,0 +1,712 @@
+<!-- Approvals content fragment — served by /approvals/content for htmx polling (T-669) -->
+
+<!-- Summary counts bar — T-1416 (T-1388 B6 / F5): split into Decisions vs Verifications -->
+<div class="approvals-summary">
+    <a href="#section-decisions" class="approval-stat approval-stat-group {{ 'decisions-active' if (tier0_count + go_count + decided_unclosed_count) else '' }}" style="text-decoration:none; color:inherit;">
+        <span class="stat-value">{{ tier0_count + go_count + decided_unclosed_count }}</span>
+        <span class="stat-label">Decisions</span>
+        <span class="stat-breakdown">{{ tier0_count }} Tier 0 · {{ go_count }} GO/NO-GO{% if decided_unclosed_count %} · {{ decided_unclosed_count }} to close{% endif %}</span>
+    </a>
+    {% if paused_count and paused_count > 0 %}
+    <a href="#section-paused" class="approval-stat approval-stat-group ac-active" style="text-decoration:none; color:inherit;">
+        <span class="stat-value">{{ paused_count }}</span>
+        <span class="stat-label">Paused</span>
+        <span class="stat-breakdown">Workers awaiting answer</span>
+    </a>
+    {% endif %}
+    {% if arc_close_count and arc_close_count > 0 %}
+    <a href="#section-arc-closure" class="approval-stat approval-stat-group decisions-active" style="text-decoration:none; color:inherit;">
+        <span class="stat-value">{{ arc_close_count }}</span>
+        <span class="stat-label">Arc Closure</span>
+        <span class="stat-breakdown">Close-ready arcs</span>
+    </a>
+    {% endif %}
+    {% if bvp_proposal_count and bvp_proposal_count > 0 %}
+    <a href="#section-bvp-proposals" class="approval-stat approval-stat-group decisions-active" style="text-decoration:none; color:inherit;">
+        <span class="stat-value">{{ bvp_proposal_count }}</span>
+        <span class="stat-label">BVP Proposals</span>
+        <span class="stat-breakdown">Pending drivers</span>
+    </a>
+    {% endif %}
+    <a href="#section-verifications" class="approval-stat approval-stat-group {{ 'ac-active' if ac_count else '' }}" style="text-decoration:none; color:inherit;">
+        <span class="stat-value">{{ ac_count }}</span>
+        <span class="stat-label">Verifications</span>
+        <span class="stat-breakdown">Human ACs</span>
+    </a>
+    <div class="approval-stat total">
+        <span class="stat-value">{{ total_count }}</span>
+        <span class="stat-label">Total</span>
+    </div>
+</div>
+
+<!-- T-1416 (T-1388 B6 / F5): Decisions group (Section A + B) -->
+{% if pending_tier0 or pending_go %}
+<h2 id="section-decisions" class="approvals-group-heading">Decisions</h2>
+{% elif deferred_count and deferred_count > 0 %}
+<!-- T-1518: empty-state exit ramp — point users at the inception board where DEFER'd live -->
+<p class="approvals-empty-hint" style="font-size:0.85rem; color:var(--pico-muted-color); margin:0.5rem 0 1rem;">
+    No pending decisions.
+    <a href="/inception?decision=defer">{{ deferred_count }} deferred inception{{ '' if deferred_count == 1 else 's' }}</a>
+    parked on the inception board (watching for promotion criteria).
+</p>
+{% endif %}
+
+<!-- Section A: Tier 0 Approvals -->
+{% if pending_tier0 %}
+<div class="section-header">
+    <h3>Tier 0 Approvals</h3>
+    {# T-3078: derived from the cards actually pending. This used to be the
+       literal "Agent blocked — requires your decision" for every card, which was
+       false for every card T-3077's test suite filed against the live queue. #}
+    <small>{% if tier0_origin_summary %}{{ tier0_origin_summary }} — requires your decision{% else %}Requires your decision{% endif %}</small>
+</div>
+{% for item in pending_tier0 %}
+{% set _o = item.origin or {} %}
+{% set _kind = _o.kind if _o.kind in ('agent', 'test', 'human') else 'unknown' %}
+<div class="approval-card {{ item.status }}" data-origin-kind="{{ _kind }}">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div class="approval-risk">{{ item.risk }}</div>
+        <span class="status-badge badge-{{ item.status }}">{{ item.status }}</span>
+    </div>
+    <div class="approval-meta">{{ item.timestamp or '' }}</div>
+    <div class="approval-command">{{ item.command_preview }}</div>
+
+    {# T-3078: origin — what asked, from where, on whose behalf. Approving is a
+       judgement about intent, and intent is what the card used to omit. #}
+    <div class="approval-origin" style="font-size:0.78rem; color:var(--pico-muted-color); margin:0.4rem 0 0; display:flex; gap:0.4rem; align-items:baseline; flex-wrap:wrap;">
+        <span class="origin-badge" data-kind="{{ _kind }}"
+              style="padding:0.1rem 0.4rem; border-radius:3px; font-weight:700; font-size:0.68rem; letter-spacing:0.04em; text-transform:uppercase;
+              {% if _kind == 'agent' %}background:var(--wt-warn); color:#1a1a1a;
+              {% elif _kind == 'test' %}background:var(--wt-muted); color:#fff;
+              {% elif _kind == 'human' %}background:var(--wt-success); color:#fff;
+              {% else %}background:var(--wt-danger); color:#fff;{% endif %}"
+              title="Derived from the process ancestry and working tree — not self-reported">{{ _kind }}</span>
+        {% if _kind == 'unknown' %}
+        <span>No provenance recorded — this card predates origin capture (T-3078), or derivation failed. Treat with the same suspicion as an unsigned request.</span>
+        {% else %}
+        {% if _o.task %}<span>task <a href="/tasks/{{ _o.task }}">{{ _o.task }}</a></span>{% endif %}
+        {% if _o.sandbox %}<span title="PROJECT_ROOT is a throwaway tree — no .git, or under a temp dir">sandbox tree</span>{% endif %}
+        {% if _o.ancestry %}<span title="Process chain that reached the gate">via {{ _o.ancestry[:3] | join(' ← ') }}</span>{% endif %}
+        {% if _o.project_root %}<span style="opacity:0.7;">{{ _o.project_root }}</span>{% endif %}
+        {% endif %}
+    </div>
+
+    {% if item.status == 'pending' %}
+    <form hx-post="/api/approvals/decide" hx-target="#result-{{ loop.index }}" hx-swap="innerHTML">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="command_hash" value="{{ item.command_hash }}">
+        <textarea name="feedback" class="approval-feedback" placeholder="Optional feedback..."></textarea>
+        <div class="approval-actions">
+            <button type="submit" name="decision" value="approved" class="btn-approve">Approve</button>
+            <button type="submit" name="decision" value="rejected" class="btn-reject outline">Reject</button>
+        </div>
+    </form>
+    <div id="result-{{ loop.index }}"></div>
+    {% elif item.status == 'expired' %}
+    <p style="font-size:0.8rem; color:var(--pico-muted-color); margin:0.5rem 0 0;">
+        Expired — agent must retry the command to generate a new request.
+    </p>
+    {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+
+<!-- Section B: GO/NO-GO Decisions -->
+{% if pending_go %}
+<div class="section-header">
+    <h3>Inception Decisions</h3>
+    <small>{{ go_count }} pending GO/NO-GO</small>
+</div>
+{% for t in pending_go %}
+<div class="approval-card go-decision" data-verdict="{{ t.verdict|default('?') }}">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+            {# T-1537: agent recommendation verdict badge — parity with partial-complete cards (T-1531) #}
+            {% if t.verdict is defined %}
+            {% set _v = t.verdict %}
+            <span class="verdict-badge" data-verdict="{{ _v }}"
+                  style="display:inline-block; padding:0.15rem 0.5rem; border-radius:3px; font-size:0.7rem; font-weight:700; letter-spacing:0.05em;
+                  {% if _v == 'GO' %}background:var(--wt-success); color:#fff;
+                  {% elif _v == 'DEFER' %}background:var(--wt-warn); color:#1a1a1a;
+                  {% elif _v == 'NO-GO' %}background:var(--wt-danger); color:#fff;
+                  {% else %}background:var(--wt-muted); color:#fff;
+                  {% endif %}"
+                  title="Agent recommendation: {{ _v }}">{{ _v }}</span>
+            {% endif %}
+            {# T-1569 / F3: reviewer agent's mechanical verdict — green PASS, red findings/needs_human #}
+            {% if t.reviewer and t.reviewer.overall %}
+            {% set _r = t.reviewer %}
+            {% set _bad = (_r.findings and _r.findings > 0) or _r.needs_human or _r.overall in ('FAIL', 'WARN') %}
+            <span class="reviewer-badge" data-overall="{{ _r.overall }}"
+                  style="display:inline-block; padding:0.15rem 0.5rem; border-radius:3px; font-size:0.65rem; font-weight:600;
+                  {% if _bad %}background:var(--wt-danger); color:#fff;{% else %}background:var(--wt-success); color:#fff;{% endif %}"
+                  title="Reviewer: {{ _r.overall }}{% if _r.findings %} · {{ _r.findings }} findings{% endif %}{% if _r.needs_human %} · needs human{% endif %}">
+                Reviewer: {{ _r.overall }}{% if _r.findings %} · {{ _r.findings }}{% endif %}{% if _r.needs_human %} ⚠{% endif %}
+            </span>
+            {% endif %}
+            {# T-100188: evidence badge from the claims-validator verdict (T-100187) #}
+            {% set _cv = t.claims %}
+            {% if _cv and _cv.overall %}
+            <span class="claims-badge" data-overall="{{ _cv.overall }}"
+                  style="display:inline-block; padding:0.15rem 0.5rem; border-radius:3px; font-size:0.65rem; font-weight:600;
+                  {% if _cv.overall == 'CONTRADICTED' %}background:var(--wt-danger); color:#fff;{% elif _cv.overall == 'CONFIRMED' %}background:var(--wt-success); color:#fff;{% else %}background:var(--wt-muted); color:#fff;{% endif %}"
+                  title="Recommendation evidence claims: {{ _cv.passed }}/{{ _cv.total }} confirmed ({{ _cv.overall }})">
+                Evidence: {{ _cv.passed }}/{{ _cv.total }}{% if _cv.overall == 'CONTRADICTED' %} ⚠{% endif %}
+            </span>
+            {% endif %}
+            <a href="/inception/{{ t.task_id }}"><strong>{{ t.task_id }}</strong></a>:
+            {{ t.name }}
+        </div>
+        <span class="status-badge badge-pending">Pending</span>
+    </div>
+    {% if t.problem_excerpt %}
+    <p class="approval-meta" style="margin-top:0.4rem;">{{ t.problem_excerpt }}</p>
+    {% endif %}
+    {% if t.artifacts %}
+    <div style="font-size:0.8rem; margin:0.25rem 0;">
+        Research: {% for a in t.artifacts %}
+        <a href="/file/{{ a.path }}">{{ a.name }}</a>{% if not loop.last %}, {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% if t.assumption_counts.total %}
+    <div class="approval-meta">
+        Assumptions: {{ t.assumption_counts.validated }}/{{ t.assumption_counts.total }} validated{% if t.assumption_counts.source == 'body' %} <span style="opacity:0.65;" title="Counted from inline `- A\d+:` bullets in the task body (not registered via `fw assumption add`)">(from body)</span>{% endif %}
+    </div>
+    {% endif %}
+    {% if t.recommendation %}
+    <details style="margin-top:0.5rem; background:var(--pico-card-sectionning-background-color); padding:0.5rem 0.75rem; border-radius:4px;" open>
+        <summary style="font-weight:600; cursor:pointer;">
+            Agent Recommendation:
+            {% if t.rec_decision == 'GO' %}
+            <span style="color:var(--wt-success);">GO</span>
+            {% elif t.rec_decision == 'NO-GO' %}
+            <span style="color:var(--wt-danger);">NO-GO</span>
+            {% elif t.rec_decision == 'DEFER' %}
+            <span style="color:var(--wt-muted);">DEFER</span>
+            {% else %}
+            {{ t.rec_decision }}
+            {% endif %}
+        </summary>
+        <div style="font-size:0.85rem; margin-top:0.4rem; white-space:pre-wrap; line-height:1.5;">{{ t.recommendation }}</div>
+    </details>
+    {% else %}
+    {# T-1214: Fallback context when agent recommendation is missing #}
+    <div style="margin-top:0.5rem; background:color-mix(in srgb, var(--wt-warn) 7%, transparent); border:1px solid color-mix(in srgb, var(--wt-warn) 27%, transparent); padding:0.5rem 0.75rem; border-radius:4px;">
+        <div style="font-size:0.8rem; font-weight:600; color:var(--wt-warn); margin-bottom:0.3rem;">
+            No agent recommendation written yet
+        </div>
+        {% if t.problem_full %}
+        <div style="font-size:0.85rem; margin-top:0.3rem;">
+            <strong>Problem:</strong> {{ t.problem_full[:300] }}{% if t.problem_full|length > 300 %}...{% endif %}
+        </div>
+        {% endif %}
+        {% if t.go_nogo_criteria %}
+        <details style="margin-top:0.3rem;" open>
+            <summary style="font-size:0.85rem; font-weight:600; cursor:pointer;">Go/No-Go Criteria</summary>
+            <div style="font-size:0.85rem; margin-top:0.3rem; white-space:pre-wrap; line-height:1.4;">{{ t.go_nogo_criteria }}</div>
+        </details>
+        {% endif %}
+        <div style="font-size:0.75rem; color:var(--wt-warn); margin-top:0.4rem;">
+            Review the <a href="/inception/{{ t.task_id }}">full task</a> for research findings,
+            or ask the agent to write a recommendation.
+        </div>
+    </div>
+    {% endif %}
+    <form hx-post="/inception/{{ t.task_id }}/decide" hx-target="closest .go-decision" hx-swap="outerHTML"
+          style="margin-top:0.5rem;">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <div class="decision-inline">
+            <label><input type="radio" name="decision" value="go" required>
+                <span class="dec-go">GO</span></label>
+            <label><input type="radio" name="decision" value="no-go">
+                <span class="dec-nogo">NO-GO</span></label>
+            <label><input type="radio" name="decision" value="defer">
+                <span class="dec-defer">DEFER</span></label>
+        </div>
+        <textarea name="rationale" placeholder="Rationale (required)..." required
+                  class="approval-feedback" style="margin-top:0.4rem;">{{ t.rationale_hint or '' }}</textarea>
+        <div class="approval-actions">
+            <button type="submit" style="font-size:0.85rem; padding:0.4rem 1rem;">
+                Record Decision
+            </button>
+        </div>
+    </form>
+</div>
+{% endfor %}
+{% endif %}
+
+<!-- T-3175: DECIDED but still open. The exact complement of the Decisions
+     section above: a task leaves that one the moment a decision is recorded, and
+     used to arrive nowhere. The sovereignty gate (update-task.sh:87) refuses agent
+     closure on owner: human, so the single remaining action is the operator's —
+     and it was on no surface at all. Measured: three inceptions invisible here,
+     one of them for six days. -->
+{% if decided_unclosed %}
+<h2 id="section-decided-unclosed" class="approvals-group-heading">Decided — awaiting closure</h2>
+<div class="section-header">
+    <h3>You already decided these</h3>
+    <small>{{ decided_unclosed_count }} inception{{ '' if decided_unclosed_count == 1 else 's' }} — decision recorded, task still open. One step left.</small>
+</div>
+{% for t in decided_unclosed %}
+<div class="approval-card">
+    <div class="approval-header">
+        <a href="/inception/{{ t.task_id }}"><strong>{{ t.task_id }}</strong></a>
+        <span class="badge badge-{{ 'go' if t.decision == 'GO' else 'nogo' }}">{{ t.decision }}</span>
+        <span class="muted">{{ t.status }}{% if t.owner %} · owner: {{ t.owner }}{% endif %}</span>
+    </div>
+    <div class="approval-body">
+        <div>{{ t.name }}</div>
+        <small class="muted">Decision is recorded; the task is still in <code>active/</code>.
+        Close it from <a href="/inception/{{ t.task_id }}">/inception/{{ t.task_id }}</a>.</small>
+    </div>
+</div>
+{% endfor %}
+{% endif %}
+
+<!-- T-1961: Arc closure — arcs that are close-ready (in-progress + ≥80% complete + anchor Recommendation) -->
+{% if arcs_close_ready %}
+<h2 id="section-arc-closure" class="approvals-group-heading">Arc Closure</h2>
+<div class="section-header">
+    <h3>Arcs ready for review</h3>
+    <small>{{ arc_close_count }} arc{{ '' if arc_close_count == 1 else 's' }} — completion ≥80% with agent <code>## Recommendation</code> on anchor</small>
+</div>
+{% for a in arcs_close_ready %}
+<div class="approval-card arc-closure" data-arc-slug="{{ a.slug }}" data-verdict="{{ a.verdict }}">
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+        <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+            {% set _v = a.verdict %}
+            {# T-2986: a blocked arc has no advisory to show. Rendering a verdict badge
+               it does not have would invite a close on evidence nobody has written. #}
+            {% if a.blocked_reason %}
+            <span class="verdict-badge" data-verdict="BLOCKED"
+                  style="display:inline-block; padding:0.15rem 0.55rem; border-radius:3px; font-size:0.72rem; font-weight:700; letter-spacing:0.05em; background:var(--wt-warn); color:#1a1a1a;"
+                  title="Meets the completion threshold but is not yet reviewable">BLOCKED</span>
+            {% else %}
+            <span class="verdict-badge" data-verdict="{{ _v }}"
+                  style="display:inline-block; padding:0.15rem 0.55rem; border-radius:3px; font-size:0.72rem; font-weight:700; letter-spacing:0.05em;
+                  {% if _v == 'CLOSE' %}background:var(--wt-success); color:#fff;
+                  {% elif _v == 'GO' %}background:var(--wt-success); color:#fff;
+                  {% elif _v == 'KEEP-OPEN' %}background:var(--wt-muted); color:#fff;
+                  {% elif _v == 'NO-GO' %}background:var(--wt-danger); color:#fff;
+                  {% elif _v == 'DEFER' %}background:var(--wt-warn); color:#1a1a1a;
+                  {% else %}background:var(--wt-muted); color:#fff;
+                  {% endif %}"
+                  title="Anchor-task agent recommendation: {{ _v }}">{{ _v }}</span>
+            {% endif %}
+            {# T-2112: explicit hx-target="#content" on every cross-page navigation link
+               inside this template. The wrapping #approvals-content div sets
+               hx-target="this" for its own 10s polling (T-669 / T-2060); htmx INHERITS
+               that to descendant anchors. Without these overrides, clicking Review or
+               an anchor-task link swaps the destination INTO the polling div (so the
+               old approvals shell breadcrumb/heading stays above it) and the next
+               polling cycle (≤10s) overwrites the swapped content with /approvals/content
+               — i.e. "bounces back". Triplet here = target + swap + push-url so the
+               browser URL also updates correctly. #}
+            <a href="/arcs/{{ a.slug }}"
+               hx-target="#content" hx-swap="innerHTML" hx-push-url="true"><strong>{{ a.name }}</strong></a>
+            <span style="font-size:0.8rem; color:var(--pico-muted-color);">
+                {{ a.completed }}/{{ a.total }} — {{ "%.0f%%" % (a.completion_ratio * 100) }}
+            </span>
+            {% if a.anchor %}
+            <span style="font-size:0.78rem; color:var(--pico-muted-color);">
+                · anchor <a href="/tasks/{{ a.anchor }}"
+                            hx-target="#content" hx-swap="innerHTML" hx-push-url="true">{{ a.anchor }}</a>
+            </span>
+            {% endif %}
+        </div>
+        <div style="display:flex; gap:0.4rem;">
+            <a href="/arcs/{{ a.slug }}/review" role="button" class="secondary outline"
+               hx-target="#content" hx-swap="innerHTML" hx-push-url="true"
+               style="margin:0; font-size:0.78rem;">Review</a>
+            {# T-2986: no Approve/Override on a blocked arc — there is no advisory to
+               approve or override yet, so the button would offer a decision that cannot
+               be made on the evidence available. #}
+            {% if not a.blocked_reason %}
+            <a href="/arcs/{{ a.slug }}/close" role="button"
+               hx-target="#content" hx-swap="innerHTML" hx-push-url="true"
+               style="margin:0; font-size:0.78rem;">Approve / Override</a>
+            {% endif %}
+        </div>
+    </div>
+    {% if a.blocked_reason %}
+    {# T-2986: say what unblocks it. A row the operator cannot act on and cannot explain
+       is worse than the silent exclusion it replaced. #}
+    <div class="headline-mechanic-box" style="border-left-color:var(--wt-warn);">
+        <strong>Not yet reviewable.</strong> {{ a.blocked_reason }}
+        {% if a.anchor %}
+        Write the advisory on
+        <a href="/tasks/{{ a.anchor }}"
+           hx-target="#content" hx-swap="innerHTML" hx-push-url="true">{{ a.anchor }}</a>
+        (<code>## Recommendation</code> — verdict, rationale, evidence), then this arc
+        becomes reviewable here.
+        {% endif %}
+    </div>
+    {% endif %}
+    {% if a.headline_mechanic %}
+    {# T-2111: headline_mechanic moved out of .approval-meta (0.75rem muted) into
+       the readable .headline-mechanic-box callout — body text + accent stripe on
+       tinted primary bg. Same class as T-2110's arc_review.html. #}
+    <div class="headline-mechanic-box">{{ a.headline_mechanic }}</div>
+    {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+
+<!-- T-2335: BVP driver proposals — agent-filed, awaiting Sovereign approve/reject (T-2332 endpoints) -->
+{% if bvp_proposals %}
+<h2 id="section-bvp-proposals" class="approvals-group-heading">BVP Driver Proposals</h2>
+<div class="section-header">
+    <h3>Pending driver proposals</h3>
+    <small>{{ bvp_proposal_count }} proposal{{ '' if bvp_proposal_count == 1 else 's' }} — Approve runs <code>fw bvp driver --add --from-watchtower</code> (Sovereign rail); Reject appends a rationale row. Audit trail: <code>.context/bvp-driver-proposals.jsonl</code></small>
+</div>
+{% for p in bvp_proposals %}
+<div class="approval-card pending bvp-proposal" id="proposal-{{ p.id }}">
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+        <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+            <code>{{ p.id }}</code>
+            <strong>{{ p.name }}</strong>
+            <span style="font-size:0.8rem; color:var(--pico-muted-color);">weight {{ p.weight }}</span>
+            <small class="muted">{{ p.author or 'unknown' }}{% if p.task %} · <a href="/tasks/{{ p.task }}" hx-target="#content" hx-swap="innerHTML" hx-push-url="true">{{ p.task }}</a>{% endif %}</small>
+        </div>
+        <div style="display:flex; gap:0.4rem; align-items:center;">
+            <button type="button"
+                    hx-post="/api/bvp/driver/approve?id={{ p.id }}"
+                    hx-target="#proposal-{{ p.id }} .dp-result"
+                    hx-swap="innerHTML"
+                    hx-on::after-request="if(event.detail.successful) setTimeout(()=>location.reload(),800)"
+                    style="margin:0; background: var(--wt-success); color: white; padding: 0.2rem 0.6rem; border: 0; font-size:0.78rem;">
+              Approve
+            </button>
+            <button type="button"
+                    hx-post="/api/bvp/driver/reject?id={{ p.id }}"
+                    hx-prompt="Reject rationale (≥30 chars — why is this not the right driver?):"
+                    hx-target="#proposal-{{ p.id }} .dp-result"
+                    hx-swap="innerHTML"
+                    hx-on::after-request="if(event.detail.successful) setTimeout(()=>location.reload(),800)"
+                    style="margin:0; background: var(--wt-danger); color: white; padding: 0.2rem 0.6rem; border: 0; font-size:0.78rem;">
+              Reject
+            </button>
+            <span class="dp-result" style="display:inline-block;"></span>
+        </div>
+    </div>
+    <div style="font-size:0.85rem; margin-top:0.35rem;">{{ p.rationale }}</div>
+    {% if p.drop %}<div style="font-size:0.78rem; color:var(--pico-muted-color); margin-top:0.2rem;">replaces <code>{{ p.drop }}</code></div>{% endif %}
+</div>
+{% endfor %}
+{% endif %}
+
+<!-- T-1808 (dispatch-safety slice 4): Paused dispatches — Workers awaiting operator answer -->
+{% if paused_dispatches %}
+<h2 id="section-paused" class="approvals-group-heading">Paused Dispatches</h2>
+<div class="section-header">
+    <h3>Workers Awaiting Resolution</h3>
+    <small>{{ paused_count }} dispatch{{ '' if paused_count == 1 else 'es' }} — Worker emitted <code>pause_requested</code>, exited cleanly, waiting for your answer</small>
+</div>
+{% for pd in paused_dispatches %}
+<div class="approval-card pending">
+    <div class="approval-risk">
+        {% if pd.severity == 'high' %}<span style="color:var(--wt-danger);">[HIGH]</span>
+        {% elif pd.severity == 'medium' %}<span style="color:var(--wt-warn);">[MED]</span>
+        {% elif pd.severity == 'low' %}<span style="color:var(--wt-muted);">[LOW]</span>
+        {% else %}<span style="color:var(--wt-muted);">[?]</span>{% endif %}
+        <a href="/review/{{ pd.task_id }}" style="text-decoration:none;">{{ pd.task_id }}</a>
+        <span style="color:var(--pico-muted-color); font-weight:normal; font-size:0.85rem;">— {{ pd.question_short or '(no question)' }}</span>
+    </div>
+    <div class="approval-meta">
+        Dispatch <code>{{ pd.dispatch_id_short }}</code>
+        · paused {{ pd.age_label }} ago
+        · severity: <strong>{{ pd.severity or '?' }}</strong>
+        · likelihood: <strong>{{ pd.likelihood or '?' }}</strong>
+        {% if pd.worker_kind %} · worker: {{ pd.worker_kind }}{% endif %}
+        {% if pd.state_ref %} · state: <code>{{ pd.state_ref }}</code>{% endif %}
+    </div>
+    <div style="font-size:0.8rem; color:var(--pico-muted-color);">
+        Answer via <a href="/review/{{ pd.task_id }}">/review/{{ pd.task_id }}</a> — the agent will read your resolution and re-dispatch (slice 5).
+    </div>
+</div>
+{% endfor %}
+{% endif %}
+
+<!-- T-1416 (T-1388 B6 / F5): Verifications group (Section C) -->
+{% if pending_acs %}
+<h2 id="section-verifications" class="approvals-group-heading">Verifications</h2>
+
+<!-- Section C: Human ACs (renamed to "Verifications" under new group heading) -->
+<div class="section-header">
+    <h3>Human Acceptance Criteria</h3>
+    <small>{{ ac_count }} across {{ ac_task_count }} task{{ 's' if ac_task_count != 1 }} — rubber-stamp + review checks</small>
+    {# T-2406: explicit expand-all affordance — operator opts into full list for arc-walk burst. #}
+    {% if pending_acs|length > 10 %}
+    <small style="margin-left:auto;">
+        {% if expand_overflow %}
+        <a href="/approvals">Collapse overflow ↑</a>
+        {% else %}
+        <a href="/approvals?expand=verifications">Expand all {{ ac_task_count }} ↓</a>
+        {% endif %}
+    </small>
+    {% endif %}
+</div>
+
+<!-- Batch completion button (T-846) — only for tasks with ALL ACs checked -->
+{% if ready_count is defined and ready_count > 0 %}
+<div id="batch-complete-result" style="margin-bottom:0.5rem;">
+    <form hx-post="/api/approvals/complete-batch" hx-target="#batch-complete-result" hx-swap="innerHTML"
+          hx-confirm="Complete {{ ready_count }} task(s) with all Human ACs checked?" style="display:inline;">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" style="background:var(--wt-success); border-color:var(--wt-success); color:white; padding:0.3rem 0.8rem; font-size:0.75rem; margin:0;">
+            Complete {{ ready_count }} Ready Task{{ 's' if ready_count != 1 }}
+        </button>
+    </form>
+</div>
+{% endif %}
+
+<!-- Filter buttons (T-839, T-1532) -->
+{% set rubber_stamp_count = pending_acs | selectattr('sort_priority', 'equalto', 2) | list | length %}
+{% set review_count = pending_acs | selectattr('sort_priority', 'equalto', 0) | list | length %}
+{% set stale_count = pending_acs | selectattr('is_stale') | list | length %}
+{% set go_count = pending_acs | selectattr('verdict', 'equalto', 'GO') | list | length %}
+{% set defer_count = pending_acs | selectattr('verdict', 'equalto', 'DEFER') | list | length %}
+{% set nogo_count = pending_acs | selectattr('verdict', 'equalto', 'NO-GO') | list | length %}
+{# T-1540 iter1: ? verdict was invisible — no filter button. Add count + button. #}
+{# T-1576: split NO-REC ('agent owes a recommendation') from ? ('verdict unparseable'). #}
+{% set norec_count = pending_acs | selectattr('state', 'equalto', 'NO-REC') | list | length %}
+{% set unknown_count = (pending_acs | selectattr('verdict', 'equalto', '?') | list | length) - norec_count %}
+<div style="display:flex; gap:0.5rem; margin-bottom:1rem; flex-wrap:wrap;">
+    <button class="ac-filter-btn outline" data-filter="all"
+            style="padding:0.3rem 0.8rem; font-size:0.75rem; margin:0;"
+            onclick="filterACs('all')">
+        All ({{ ac_task_count }})
+    </button>
+    {% if go_count %}
+    <button class="ac-filter-btn outline" data-filter="go"
+            style="padding:0.3rem 0.8rem; font-size:0.75rem; margin:0; border-color:var(--wt-success); color:var(--wt-success);"
+            onclick="filterACs('go')"
+            title="Tasks the agent recommends GO — likely rubber-stamp">
+        GO ({{ go_count }})
+    </button>
+    {% endif %}
+    {% if defer_count %}
+    <button class="ac-filter-btn outline" data-filter="defer"
+            style="padding:0.3rem 0.8rem; font-size:0.75rem; margin:0; border-color:var(--wt-warn); color:var(--wt-warn);"
+            onclick="filterACs('defer')"
+            title="Tasks the agent recommends DEFER — needs strategic decision">
+        DEFER ({{ defer_count }})
+    </button>
+    {% endif %}
+    {% if nogo_count %}
+    <button class="ac-filter-btn outline" data-filter="nogo"
+            style="padding:0.3rem 0.8rem; font-size:0.75rem; margin:0; border-color:var(--wt-danger); color:var(--wt-danger);"
+            onclick="filterACs('nogo')"
+            title="Tasks the agent recommends NO-GO">
+        NO-GO ({{ nogo_count }})
+    </button>
+    {% endif %}
+    {% if norec_count %}
+    {# T-1576: NO-REC = agent owes a recommendation (no `## Recommendation` section). #}
+    <button class="ac-filter-btn outline" data-filter="norec"
+            style="padding:0.3rem 0.8rem; font-size:0.75rem; margin:0; border-color:var(--wt-info); color:var(--wt-info);"
+            onclick="filterACs('norec')"
+            title="Agent has not written a Recommendation block — task not ready for review yet (T-679/T-1576).">
+        NO-REC ({{ norec_count }})
+    </button>
+    {% endif %}
+    {% if unknown_count %}
+    <button class="ac-filter-btn outline" data-filter="unknown"
+            style="padding:0.3rem 0.8rem; font-size:0.75rem; margin:0; border-color:var(--wt-muted); color:var(--wt-muted);"
+            onclick="filterACs('unknown')"
+            title="Recommendation section exists but verdict line is missing/unparseable.">
+        ? ({{ unknown_count }})
+    </button>
+    {% endif %}
+    <button class="ac-filter-btn outline" data-filter="review"
+            style="padding:0.3rem 0.8rem; font-size:0.75rem; margin:0; border-color:var(--wt-warn); color:var(--wt-warn);"
+            onclick="filterACs('review')">
+        Review ({{ review_count }})
+    </button>
+    <button class="ac-filter-btn outline" data-filter="rubber-stamp"
+            style="padding:0.3rem 0.8rem; font-size:0.75rem; margin:0; border-color:var(--wt-success); color:var(--wt-success);"
+            onclick="filterACs('rubber-stamp')">
+        Rubber-stamp ({{ rubber_stamp_count }})
+    </button>
+    {% if stale_count %}
+    <button class="ac-filter-btn outline" data-filter="stale"
+            style="padding:0.3rem 0.8rem; font-size:0.75rem; margin:0; border-color:var(--wt-warn); color:var(--wt-warn);"
+            onclick="filterACs('stale')">
+        Stale >7d ({{ stale_count }})
+    </button>
+    {% endif %}
+</div>
+<script>
+function filterACs(filter) {
+    // T-2038: a filtered card may live in the collapsed overflow — open it so the match shows.
+    if (filter !== 'all') { var _ov = document.querySelector('.ac-overflow'); if (_ov) _ov.open = true; }
+    document.querySelectorAll('.human-ac-group').forEach(function(card) {
+        var priority = card.dataset.priority;
+        var stale = card.dataset.stale === 'true';
+        var verdict = card.dataset.verdict;
+        var state = card.dataset.state;
+        var show = filter === 'all'
+            || (filter === 'review' && priority === '0')
+            || (filter === 'rubber-stamp' && priority === '2')
+            || (filter === 'stale' && stale)
+            || (filter === 'go' && verdict === 'GO')
+            || (filter === 'defer' && verdict === 'DEFER')
+            || (filter === 'nogo' && verdict === 'NO-GO')
+            // T-1576: norec and unknown are distinct.
+            || (filter === 'norec' && state === 'NO-REC')
+            || (filter === 'unknown' && (verdict === '?' || !verdict) && state !== 'NO-REC');
+        card.style.display = show ? '' : 'none';
+    });
+    document.querySelectorAll('.ac-filter-btn').forEach(function(btn) {
+        btn.classList.toggle('contrast', btn.dataset.filter === filter);
+    });
+}
+</script>
+{# T-2038: bound rendered height. Render the first _ac_cap (most-actionable, list is
+   sorted by priority,age) normally; wrap the overflow in a collapsed <details> so it
+   is display:none — excluded from scrollHeight and from full_page screenshots — yet
+   still in the DOM and one click away (nothing dropped).
+
+   T-2103: lowered cap 15 → 10. With 4 pending inception cards (~760px each, full
+   Recommendation rendered open by default) + verbose AC cards (~285px each),
+   the 15-AC cap pushed total to 8926px (>8000 cap). Cap=10 saves ~1425px →
+   total ~7500px, comfortably under cap. Overflow group still surfaces N-10
+   remaining; sort already prioritises REVIEW + stale so top 10 are right 10. #}
+{% set _ac_cap = 10 %}
+{% for t in pending_acs %}
+{% if loop.index == _ac_cap + 1 %}
+{# T-2406: open by default when ?expand=verifications was passed. Summary promoted from
+   thin dashed border (footnote-class) to button-styled CTA so the overflow reads as a
+   clickable affordance, not a section divider. Operator framing was "rows don't render";
+   the rows DID render but the disclosure was sub-perceptual. #}
+<details class="ac-overflow" style="margin:0.75rem 0;" {% if expand_overflow %}open{% endif %}>
+<summary style="cursor:pointer; font-weight:700; padding:0.65rem 1rem; color:#fff; background:var(--wt-accent, var(--pico-primary)); border:none; border-radius:6px; font-size:0.9rem; box-shadow:0 1px 3px rgba(0,0,0,0.12);">
+  {% if expand_overflow %}▾{% else %}▸{% endif %}
+  {{ pending_acs|length - _ac_cap }} more verification{{ 's' if (pending_acs|length - _ac_cap) != 1 }} — lower priority, all still actionable
+</summary>
+{% endif %}
+<div class="approval-card human-ac-group" data-priority="{{ t.sort_priority }}" data-stale="{{ 'true' if t.is_stale else 'false' }}" data-verdict="{{ t.verdict|default('?') }}" data-state="{{ t.state|default('?') }}">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+        <div>
+            <a href="/tasks/{{ t.task_id }}"><strong>{{ t.task_id }}</strong></a>:
+            {{ t.name }}
+        </div>
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+            {# T-1531: agent recommendation verdict badge — green=GO, amber=DEFER, red=NO-GO, grey=?
+               T-1576: prefer state so NO-REC ('agent owes a recommendation') reads distinctly from ? ('verdict unparseable'). #}
+            {% set _v = t.state if (t.state is defined and t.state == 'NO-REC') else (t.verdict if t.verdict is defined else '?') %}
+            <span class="verdict-badge" data-verdict="{{ _v }}"
+                  style="font-size:0.65rem; font-weight:600; padding:0.1rem 0.35rem; border-radius:3px; white-space:nowrap;
+                         {% if _v == 'GO' %}background:var(--wt-success); color:#fff;
+                         {% elif _v == 'DEFER' %}background:var(--wt-warn); color:#1a1a1a;
+                         {% elif _v == 'NO-GO' %}background:var(--wt-danger); color:#fff;
+                         {% elif _v == 'NO-REC' %}background:var(--wt-info); color:#fff;
+                         {% else %}background:var(--pico-muted-border-color); color:var(--pico-muted-color);{% endif %}"
+                  title="{% if _v == 'NO-REC' %}Agent has not written a Recommendation block — task not ready for review yet (T-1576).{% else %}Agent recommendation: {{ _v }}{% endif %}">{{ _v }}</span>
+            {# T-1569 / F3: reviewer mechanical verdict — parity with inception cards #}
+            {% if t.reviewer and t.reviewer.overall %}
+            {% set _r = t.reviewer %}
+            {% set _bad = (_r.findings and _r.findings > 0) or _r.needs_human or _r.overall in ('FAIL', 'WARN') %}
+            <span class="reviewer-badge" data-overall="{{ _r.overall }}"
+                  style="font-size:0.6rem; font-weight:600; padding:0.1rem 0.3rem; border-radius:3px; white-space:nowrap;
+                         {% if _bad %}background:var(--wt-danger); color:#fff;{% else %}background:var(--wt-success); color:#fff;{% endif %}"
+                  title="Reviewer: {{ _r.overall }}{% if _r.findings %} · {{ _r.findings }} findings{% endif %}{% if _r.needs_human %} · needs human{% endif %}">
+                R:{{ _r.overall }}{% if _r.findings %}·{{ _r.findings }}{% endif %}{% if _r.needs_human %}⚠{% endif %}
+            </span>
+            {% endif %}
+            {% if t.age_days is defined %}
+            <span style="font-size:0.65rem; color:{% if t.is_stale %}var(--wt-warn){% else %}var(--pico-muted-color){% endif %}; white-space:nowrap;"
+                  {% if t.is_stale %}title="Stale: waiting >7 days"{% endif %}>
+                {{ t.age_days }}d{% if t.is_stale %} &#9888;{% endif %}
+            </span>
+            {% endif %}
+            <a href="/review/{{ t.task_id }}" title="Mobile review" style="font-size:0.75rem; text-decoration:none; padding:0.15rem 0.4rem; border:1px solid var(--pico-muted-border-color); border-radius:3px;">&#128241;</a>
+            <span class="status-badge badge-{{ t.status|replace('-','') }}">{{ t.status }}</span>
+        </div>
+    </div>
+    {% set unchecked_count = t.human_acs | rejectattr('checked') | list | length %}
+    {% for ac in t.human_acs %}
+    <details class="human-ac-card" {% if not ac.checked %}open{% endif %}
+             style="margin:0.3rem 0; padding:0.4rem 0.6rem; border-radius:4px; background:var(--pico-code-background-color);">
+        <summary style="display:flex; align-items:flex-start; gap:0.4rem; cursor:pointer; font-size:0.85rem;">
+            <form hx-post="/api/task/{{ t.task_id }}/toggle-ac"
+                  hx-target="find input[type=checkbox]" hx-swap="outerHTML"
+                  style="display:inline;" onclick="event.stopPropagation();">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="line" value="{{ ac.line_idx }}">
+                <input type="checkbox" {% if ac.checked %}checked{% endif %}
+                       onchange="this.form.requestSubmit()"
+                       style="margin:0.15rem 0 0;">
+            </form>
+            {% if ac.confidence == 'review' %}
+            <span class="confidence-badge badge-review">Review</span>
+            {% elif ac.confidence == 'rubber-stamp' %}
+            <span class="confidence-badge badge-rubber-stamp">Rubber-stamp</span>
+            {% endif %}
+            <span class="{% if ac.checked %}ac-checked{% endif %}">{{ ac.text }}</span>
+        </summary>
+        {% if ac.steps or ac.expected or ac.if_not %}
+        <div style="padding:0.3rem 0 0 1.5rem; font-size:0.8rem;">
+            {% if ac.steps %}
+            <div style="margin-bottom:0.3rem;"><strong>Steps:</strong></div>
+            <ol style="margin:0 0 0.3rem 1rem; padding:0;">
+                {% for step in ac.steps %}
+                <li>{{ step }}</li>
+                {% endfor %}
+            </ol>
+            {% endif %}
+            {% if ac.expected %}
+            <div><strong>Expected:</strong> {{ ac.expected }}</div>
+            {% endif %}
+            {% if ac.if_not %}
+            <div style="color:var(--pico-muted-color);"><strong>If not:</strong> {{ ac.if_not }}</div>
+            {% endif %}
+        </div>
+        {% endif %}
+    </details>
+    {% endfor %}
+    {% if unchecked_count == 0 %}
+    <div style="margin-top:0.5rem;">
+        <form hx-post="/api/task/{{ t.task_id }}/complete" hx-target="closest .human-ac-group" hx-swap="outerHTML">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" style="background:var(--wt-success); border-color:var(--wt-success); color:white; padding:0.3rem 1rem; font-size:0.8rem;">
+                Complete Task
+            </button>
+        </form>
+    </div>
+    {% endif %}
+</div>
+{% endfor %}
+{% if pending_acs|length > _ac_cap %}</details>{% endif %}
+{% endif %}
+
+<!-- Empty state -->
+{% if not pending_tier0 and not pending_go and not pending_acs and not paused_dispatches %}
+<div class="empty-state">
+    <p>Nothing needs your attention.</p>
+    <p><small>Tier 0 gates, inception decisions, and human acceptance criteria will appear here when pending.</small></p>
+</div>
+{% endif %}
+
+<!-- Recently Resolved -->
+{% if resolved_tier0 %}
+<details style="margin-top:2rem;">
+    <summary><h3 style="display:inline;">Recent</h3></summary>
+    {% for item in resolved_tier0 %}
+    <div class="approval-card {{ item.status }}">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div class="approval-risk" style="font-weight:400;">{{ item.risk }}</div>
+            <span class="status-badge badge-{{ item.status }}">{{ item.status }}</span>
+        </div>
+        <div class="approval-meta">
+            {{ item.get('response', {}).get('responded_at', '') }}
+            {% if item.get('response', {}).get('feedback') %}
+             — {{ item.response.feedback }}
+            {% endif %}
+        </div>
+        <div class="approval-command">{{ item.command_preview }}</div>
+    </div>
+    {% endfor %}
+</details>
+{% endif %}

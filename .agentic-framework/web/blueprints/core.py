@@ -1,0 +1,642 @@
+"""Core blueprint — dashboard, project docs, directives."""
+
+import re as re_mod
+import time as _time_mod
+
+import markdown2
+from flask import Blueprint, abort, render_template
+
+from lib.arc_membership import scan_tasks_by_arc_membership
+from web.context_loader import load_concerns, load_decisions, load_directives, load_patterns, load_practices
+from web.shared import (
+    FRAMEWORK_ROOT, PROJECT_ROOT, render_page, load_yaml as _load_yaml,
+    load_scan, parse_frontmatter, load_latest_audit, get_all_task_metadata,
+    _auto_link_files,
+)
+from web.subprocess_utils import run_git_command
+
+bp = Blueprint("core", __name__)
+
+# --- Dashboard caches (T-1246) ---
+_trace_cache = {"data": None, "ts": 0}
+_qr_cache = {"data": None, "ts": 0}
+_concerns_cache = {"data": None, "ts": 0}
+_DASHBOARD_CACHE_TTL = 60  # seconds
+
+
+def _get_attention_items():
+    """Build the 'needs attention' list for the dashboard.
+
+    T-1235: Uses shared task cache instead of re-reading all files.
+    """
+    items = []
+
+    # Active tasks with no recent update — use shared cache
+    for fm in get_all_task_metadata():
+        if fm.get("_location") != "active":
+            continue
+        tid = fm.get("id", "")
+        status = fm.get("status", "")
+        name = fm.get("name", "")[:40]
+        if status == "issues":
+            items.append({"type": "task", "id": tid, "message": f"{name} — has issues"})
+        else:
+            items.append({"type": "task", "id": tid, "message": f"{name} — {status}"})
+
+    # Concerns near trigger (T-398: migrated from gaps.yaml to concerns.yaml)
+    for c in load_concerns():
+        if c.get("status") == "watching" and c.get("severity") in ("high", "medium"):
+            items.append({
+                "type": "gap",
+                "id": c.get("id", ""),
+                "message": c.get("title", "")[:50],
+            })
+
+    return items
+
+
+def _get_recent_activity():
+    """Build recent activity from handovers."""
+    activity = []
+    handovers_dir = PROJECT_ROOT / ".context" / "handovers"
+    if handovers_dir.exists():
+        for f in sorted(handovers_dir.glob("S-*.md"), reverse=True)[:3]:
+            content = f.read_text(errors="replace")
+            fm, _ = parse_frontmatter(content)
+            if fm:
+                sid = fm.get("session_id", f.stem)
+                touched = fm.get("tasks_touched", [])
+                completed = fm.get("tasks_completed", [])
+                parts = []
+                if completed:
+                    parts.append(f"{len(completed)} completed")
+                if touched:
+                    parts.append(f"{len(touched)} touched")
+                detail = ", ".join(parts) if parts else "session recorded"
+                activity.append({"label": sid, "detail": detail})
+    return activity
+
+
+def _get_knowledge_counts():
+    """Count learnings, practices, and decisions."""
+    from web.context_loader import load_learnings
+    return {
+        "learnings": len(load_learnings()),
+        "practices": len(load_practices()),
+        "decisions": len(load_decisions()),
+    }
+
+
+def _get_traceability():
+    """Get git traceability percentage. Cached for 60s (T-1246)."""
+    now = _time_mod.monotonic()
+    if _trace_cache["data"] is not None and (now - _trace_cache["ts"]) < _DASHBOARD_CACHE_TTL:
+        return _trace_cache["data"]
+    output, ok = run_git_command(["log", "--oneline", "--all"])
+    result = 0
+    if ok and output:
+        lines = output.split("\n")
+        total = len(lines)
+        traced = sum(1 for l in lines if re_mod.search(r"T-\d{3,}", l))
+        result = int(traced * 100 / total) if total > 0 else 0
+    _trace_cache["data"] = result
+    _trace_cache["ts"] = now
+    return result
+
+
+def _get_audit_status():
+    """Get latest audit status via shared helper."""
+    _, summary, _ = load_latest_audit()
+    if not summary:
+        return "UNKNOWN", 0, 0, 0
+    p = summary.get("pass", 0)
+    w = summary.get("warn", 0)
+    f = summary.get("fail", 0)
+    if f > 0:
+        return "FAIL", p, w, f
+    if w > 0:
+        return "WARN", p, w, f
+    return "PASS", p, w, f
+
+
+def _get_inception_checklist():
+    """Build inception checklist for new projects."""
+    checklist = []
+
+    # Framework config
+    has_config = (PROJECT_ROOT / ".framework.yaml").exists()
+    checklist.append({"label": "Framework config", "done": has_config, "action_url": None, "action_label": None})
+
+    # Git hooks
+    has_hooks = (PROJECT_ROOT / ".git" / "hooks" / "commit-msg").exists()
+    checklist.append({"label": "Git hooks installed", "done": has_hooks, "action_url": None, "action_label": None})
+
+    # First task
+    active_dir = PROJECT_ROOT / ".tasks" / "active"
+    completed_dir = PROJECT_ROOT / ".tasks" / "completed"
+    has_tasks = False
+    if active_dir.exists():
+        has_tasks = len(list(active_dir.glob("T-*.md"))) > 0
+    if not has_tasks and completed_dir.exists():
+        has_tasks = len(list(completed_dir.glob("T-*.md"))) > 0
+    checklist.append({"label": "First task created", "done": has_tasks, "action_url": "/tasks/new", "action_label": "Create Task"})
+
+    # Session initialized
+    working_dir = PROJECT_ROOT / ".context" / "working"
+    has_session = working_dir.exists() and any(working_dir.glob("*.yaml"))
+    checklist.append({"label": "Session initialized", "done": has_session, "action_url": None, "action_label": None})
+
+    # First handover
+    handovers_dir = PROJECT_ROOT / ".context" / "handovers"
+    has_handover = handovers_dir.exists() and len(list(handovers_dir.glob("S-*.md"))) > 0
+    checklist.append({"label": "First handover", "done": has_handover, "action_url": None, "action_label": None})
+
+    return checklist
+
+
+def _get_concerns_summary():
+    """Summarize concerns register for dashboard (T-398). Cached for 60s (T-1246)."""
+    now = _time_mod.monotonic()
+    if _concerns_cache["data"] is not None and (now - _concerns_cache["ts"]) < _DASHBOARD_CACHE_TTL:
+        return _concerns_cache["data"]
+    all_concerns = load_concerns()
+    watching = [c for c in all_concerns if c.get("status") == "watching"]
+    gaps = [c for c in watching if c.get("type", "gap") == "gap"]
+    risks = [c for c in watching if c.get("type") == "risk"]
+    high = [c for c in watching if c.get("severity") in ("high",) or c.get("ranking") in ("high", "urgent")]
+    result = {
+        "total_watching": len(watching),
+        "gaps": len(gaps),
+        "risks": len(risks),
+        "high": len(high),
+    }
+    _concerns_cache["data"] = result
+    _concerns_cache["ts"] = now
+    return result
+
+
+def _get_focus_task():
+    """Get current focus task for dashboard (T-398)."""
+    focus_path = PROJECT_ROOT / ".context" / "working" / "focus.yaml"
+    if not focus_path.exists():
+        return None
+    data = _load_yaml(focus_path)
+    task_id = data.get("current_task")
+    if not task_id:
+        return None
+    # Find task file for name
+    active_dir = PROJECT_ROOT / ".tasks" / "active"
+    if active_dir.exists():
+        for f in active_dir.glob(f"{task_id}-*.md"):
+            content = f.read_text(errors="replace")
+            fm, _ = parse_frontmatter(content)
+            if fm:
+                return {"id": task_id, "name": fm.get("name", "")[:50]}
+    return {"id": task_id, "name": ""}
+
+
+def _get_arcs_in_flight():
+    """T-1661: Return in-progress arcs with task counts for landing-page section.
+
+    Returns list of dicts: {id, name, status, task_count, focused}.
+    Empty list if no arcs registered or all closed.
+    """
+    arcs_dir = PROJECT_ROOT / ".context" / "arcs"
+    if not arcs_dir.exists():
+        return []
+
+    # Read focused arc id (single-arc focus model).
+    focused = None
+    arc_focus_file = PROJECT_ROOT / ".context" / "working" / "arc-focus.yaml"
+    if arc_focus_file.exists():
+        try:
+            d = _load_yaml(arc_focus_file)
+            focused = d.get("current_arc") if d else None
+        except Exception:
+            focused = None
+
+    arcs = []
+    # T-1880 (T-NEW-15): single pass over .tasks/, shared across all arc
+    # cards on this page. Replaces N×O(tasks) inline loop with 1×O(tasks).
+    _by_arc_id, _by_tag = scan_tasks_by_arc_membership(PROJECT_ROOT)
+    for f in sorted(arcs_dir.glob("*.yaml")):
+        try:
+            d = _load_yaml(f) or {}
+        except Exception:
+            continue
+        if d.get("status") != "in-progress":
+            continue
+        # T-1848: slug (filename stem) is the tag namespace; `id:` is the
+        # immutable arc-NNN. Tasks tagged `arc:dispatch-safety` would not
+        # match `arc:arc-001`.
+        slug = d.get("slug") or f.stem
+        arc_numeric_id = d.get("id") or slug
+        # T-1879/T-1880: union of arc_id frontmatter (slug or arc-NNN form)
+        # + legacy arc:<slug> tag, deduplicated. Shared helper guarantees
+        # parity with /arcs and /tasks?arc filter (which call the same
+        # function from lib/arc_membership.py).
+        union: set[str] = set()
+        union.update(_by_arc_id.get(slug, []))
+        union.update(_by_arc_id.get(arc_numeric_id, []))
+        union.update(_by_tag.get(f"arc:{slug}", []))
+        task_count = len(union)
+        arcs.append({
+            "id": arc_numeric_id,
+            "slug": slug,
+            "name": d.get("name", slug),
+            "status": d.get("status", "in-progress"),
+            "task_count": task_count,
+            "focused": (arc_numeric_id == focused or slug == focused),
+        })
+    return arcs
+
+
+def _get_stale_tasks():
+    """Count stale tasks: active with issues or >7d without update (T-398).
+
+    T-1235: Uses shared task cache instead of re-reading all files.
+    """
+    import datetime
+    stale = []
+    now = datetime.datetime.now(datetime.timezone.utc)
+    for fm in get_all_task_metadata():
+        if fm.get("_location") != "active":
+            continue
+        status = fm.get("status", "")
+        if status == "issues":
+            stale.append({"id": fm.get("id", ""), "reason": "has issues"})
+        elif status in ("started-work", "captured"):
+            last = fm.get("last_update") or fm.get("created")
+            if last:
+                if isinstance(last, str):
+                    try:
+                        last = datetime.datetime.fromisoformat(last.replace("Z", "+00:00"))
+                    except ValueError:
+                        continue
+                # YAML may parse dates as datetime.date — coerce to datetime
+                if isinstance(last, datetime.date) and not isinstance(last, datetime.datetime):
+                    last = datetime.datetime.combine(last, datetime.time.min, tzinfo=datetime.timezone.utc)
+                if hasattr(last, "tzinfo") and last.tzinfo is None:
+                    last = last.replace(tzinfo=datetime.timezone.utc)
+                if (now - last).days > 7:
+                    stale.append({"id": fm.get("id", ""), "reason": f"no update in {(now - last).days}d"})
+    return stale
+
+
+def _get_pattern_summary():
+    """Count patterns by type for the dashboard."""
+    pdata = load_patterns()
+    return {
+        "failure": len(pdata.get("failure_patterns", [])),
+        "success": len(pdata.get("success_patterns", [])),
+        "antifragile": len(pdata.get("antifragile_patterns", [])),
+        "workflow": len(pdata.get("workflow_patterns", [])),
+    }
+
+
+def _get_approval_qr():
+    """Build approval summary and QR data URL for mobile access (T-671). Cached for 60s (T-1246)."""
+    now = _time_mod.monotonic()
+    if _qr_cache["data"] is not None and (now - _qr_cache["ts"]) < _DASHBOARD_CACHE_TTL:
+        return _qr_cache["data"]
+    try:
+        from web.blueprints.approvals import _build_approvals_context
+        ctx = _build_approvals_context()
+        total = ctx.get("total_count", 0)
+        if total == 0:
+            _qr_cache["data"] = (None, None, None)
+            _qr_cache["ts"] = _time_mod.monotonic()
+            return _qr_cache["data"]
+        summary = {"total": total, "tier0": ctx.get("tier0_count", 0),
+                   "go": ctx.get("go_count", 0), "acs": ctx.get("ac_task_count", 0)}
+    except Exception:
+        _qr_cache["data"] = (None, None, None)
+        _qr_cache["ts"] = _time_mod.monotonic()
+        return _qr_cache["data"]
+
+    # Generate QR code as data URL
+    try:
+        import base64
+        import io
+        import socket
+
+        import qrcode
+
+        # Use LAN IP for cross-device access
+        hostname = socket.gethostname()
+        try:
+            lan_ip = socket.gethostbyname(hostname)
+        except socket.gaierror:
+            lan_ip = "127.0.0.1"
+        # Detect port from Flask request context
+        from flask import request
+        port = request.host.split(":")[-1] if ":" in request.host else "3000"
+        url = f"http://{lan_ip}:{port}/approvals"
+
+        qr = qrcode.QRCode(version=1, box_size=4, border=2,
+                            error_correction=qrcode.constants.ERROR_CORRECT_L)
+        qr.add_data(url)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        data_url = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+        result = (summary, data_url, url)
+    except Exception:
+        result = (summary, None, None)
+    _qr_cache["data"] = result
+    _qr_cache["ts"] = _time_mod.monotonic()
+    return result
+
+
+def _get_token_usage():
+    """Get token usage summary for landing page widget (T-803)."""
+    try:
+        from web.blueprints.costs import _load_all_sessions, _fmt_tokens
+        sessions = _load_all_sessions()
+        if not sessions:
+            return None
+        current = sessions[-1]
+        total_all = sum(s["total"] for s in sessions)
+        total_cache_read = sum(s["cache_read"] for s in sessions)
+        cache_hit = (total_cache_read * 100 / total_all) if total_all > 0 else 0
+        return {
+            "current_tokens": _fmt_tokens(current["total"]),
+            "current_turns": current["turns"],
+            "project_tokens": _fmt_tokens(total_all),
+            "sessions": len(sessions),
+            "cache_hit": f"{cache_hit:.0f}",
+        }
+    except Exception:
+        return None
+
+
+@bp.route("/")
+def index():
+    # T-1235: Use shared cache for task counts
+    all_task_data = get_all_task_metadata()
+    active_count = sum(1 for t in all_task_data if t.get("_location") == "active")
+    completed_count = sum(1 for t in all_task_data if t.get("_location") == "completed")
+
+    # Inception detection: no tasks at all
+    is_inception = (active_count == 0 and completed_count == 0)
+
+    if is_inception:
+        return render_page(
+            "index.html",
+            page_title="Watchtower",
+            is_inception=True,
+            inception_checklist=_get_inception_checklist(),
+        )
+
+    # Try cockpit view (Phase 4 — scan-driven dashboard)
+    scan_data = load_scan()
+    if scan_data:
+        from web.blueprints.cockpit import get_cockpit_context
+        ctx = get_cockpit_context(scan_data)
+        ctx["recent_activity"] = _get_recent_activity()
+        ctx["concerns_summary"] = _get_concerns_summary()
+        ctx["focus_task"] = _get_focus_task()
+        ctx["stale_tasks"] = _get_stale_tasks()
+        ctx["arcs_in_flight"] = _get_arcs_in_flight()
+        # T-671: QR code for mobile approvals
+        approval_summary, qr_data, qr_url = _get_approval_qr()
+        ctx["approval_summary"] = approval_summary
+        ctx["qr_approvals_data"] = qr_data
+        ctx["qr_approvals_url"] = qr_url
+        # T-803: Token usage widget
+        ctx["token_usage"] = _get_token_usage()
+        # T-2022: knowledge counts for System Health (scan omits project_health.knowledge;
+        # source from helpers like the index.html fallback does)
+        ctx["knowledge_counts"] = _get_knowledge_counts()
+        ctx["pattern_summary"] = _get_pattern_summary()
+        return render_page("cockpit.html", page_title="Watchtower", **ctx)
+
+    # Fallback: existing dashboard (no scan data)
+    concerns_summary = _get_concerns_summary()
+
+    handovers_dir = PROJECT_ROOT / ".context" / "handovers"
+    last_session = "None"
+    if handovers_dir.exists():
+        sessions = sorted(handovers_dir.glob("S-*.md"), reverse=True)
+        if sessions:
+            last_session = sessions[0].stem
+
+    audit_status, audit_pass, audit_warn, audit_fail = _get_audit_status()
+
+    # T-671: Approval summary + QR code for mobile access
+    approval_summary, qr_data, qr_url = _get_approval_qr()
+
+    return render_page(
+        "index.html",
+        page_title="Watchtower",
+        active_count=active_count,
+        completed_count=completed_count,
+        gap_count=concerns_summary["total_watching"],
+        concerns_summary=concerns_summary,
+        focus_task=_get_focus_task(),
+        stale_tasks=_get_stale_tasks(),
+        arcs_in_flight=_get_arcs_in_flight(),
+        last_session=last_session,
+        is_inception=False,
+        audit_status=audit_status,
+        audit_pass=audit_pass,
+        audit_warn=audit_warn,
+        audit_fail=audit_fail,
+        attention_items=_get_attention_items(),
+        recent_activity=_get_recent_activity(),
+        knowledge_counts=_get_knowledge_counts(),
+        traceability=_get_traceability(),
+        inception_checklist=_get_inception_checklist(),
+        pattern_summary=_get_pattern_summary(),
+        approval_summary=approval_summary,
+        qr_approvals_data=qr_data,
+        qr_approvals_url=qr_url,
+    )
+
+
+# T-2781: rows shown in the initial /project response before "Show all" is clicked.
+# Must match the limit the expand endpoint slices past, or items would either
+# duplicate (expand starts before this many) or go missing (expand starts after).
+PROJECT_DOCS_PREVIEW_LIMIT = 25
+
+
+def _build_project_categories():
+    """Discover project documentation and group it by category.
+
+    Shared by /project (preview) and /project/expand/<cat> (remainder) so both
+    routes see the same discovery pass rather than two copies of this logic
+    drifting apart.
+    """
+    categories = {}
+    skip = {".git", ".tasks", ".context", "node_modules", ".pytest_cache", ".playwright-mcp", "__pycache__"}
+
+    def _add(cat, path, display_name=None, root=None, id_prefix=""):
+        # T-2651 (OBS-097): framework-owned docs pass root=FRAMEWORK_ROOT and,
+        # in split-root installs, an id_prefix ("fw--") that project_doc routes
+        # back to FRAMEWORK_ROOT. Coincident roots emit no prefix — unchanged.
+        rel = path.relative_to(root or PROJECT_ROOT)
+        doc_id = id_prefix + str(rel).replace("/", "--")
+        for suffix in (".md", ".yaml", ".yml"):
+            doc_id = doc_id.removesuffix(suffix)
+        categories.setdefault(cat, []).append({
+            "name": display_name or path.stem,
+            "path": str(rel),
+            "doc_id": doc_id,
+        })
+
+    # Governance: CLAUDE.md, FRAMEWORK.md, numbered specs (0*.md)
+    for name in ("CLAUDE.md", "FRAMEWORK.md"):
+        p = PROJECT_ROOT / name
+        if p.exists():
+            _add("Governance", p)
+    for f in sorted(PROJECT_ROOT.glob("0*.md")):
+        _add("Governance", f)
+
+    # Design docs: docs/ and docs/plans/
+    docs_dir = PROJECT_ROOT / "docs"
+    if docs_dir.is_dir():
+        for f in sorted(docs_dir.rglob("*.md")):
+            if not any(part in skip for part in f.parts):
+                _add("Design", f)
+
+    # Agent docs: agents/*/AGENT.md — FRAMEWORK-owned (T-2651, OBS-097).
+    # Paired with the fw-- routing in project_doc below; in split-root
+    # installs the vendored AGENT.md docs now surface instead of silently
+    # vanishing (T-2648 had allowlisted this site pending exactly this change).
+    agents_dir = FRAMEWORK_ROOT / "agents"
+    _fw_split = FRAMEWORK_ROOT.resolve() != PROJECT_ROOT.resolve()
+    if agents_dir.is_dir():
+        for f in sorted(agents_dir.glob("*/AGENT.md")):
+            _add("Agents", f, root=FRAMEWORK_ROOT,
+                 id_prefix="fw--" if _fw_split else "")
+
+    # Project docs: remaining root .md files
+    seen = {d["path"] for cat_docs in categories.values() for d in cat_docs}
+    for f in sorted(PROJECT_ROOT.glob("*.md")):
+        rel = str(f.relative_to(PROJECT_ROOT))
+        if rel not in seen and f.stem != "zzz-default":
+            _add("Project", f)
+
+    # Commands: .claude/commands/*.md
+    commands_dir = PROJECT_ROOT / ".claude" / "commands"
+    if commands_dir.is_dir():
+        for f in sorted(commands_dir.glob("*.md")):
+            _add("Commands", f)
+
+    # Research: recent episodic summaries (.context/episodic/T-*.yaml)
+    episodic_dir = PROJECT_ROOT / ".context" / "episodic"
+    if episodic_dir.is_dir():
+        def _task_num(f):
+            m = re_mod.search(r"T-(\d+)", f.stem)
+            return int(m.group(1)) if m else 0
+        episodics = sorted(episodic_dir.glob("T-*.yaml"), key=_task_num, reverse=True)
+        for f in episodics:
+            name = f.stem
+            try:
+                header = f.read_text(encoding="utf-8")[:800]
+                m = re_mod.search(r'task_name:\s*"(.+?)"', header)
+                if m:
+                    name = f"{f.stem}: {m.group(1)[:60]}"
+            except Exception:
+                pass
+            _add("Research", f, display_name=name)
+
+    return categories
+
+
+@bp.route("/project")
+def project():
+    categories = _build_project_categories()
+    # T-2781: the "Research" category alone was 2,457 episodic entries — rendering
+    # every row (even hidden via CSS, T-2775's collapsed-<details> class of bug)
+    # shipped 2.27MB regardless of what the browser displayed. Slice server-side
+    # so bytes actually sent match what's visible; the rest is fetched on demand
+    # by /project/expand/<cat> (below), keeping the remainder reachable rather
+    # than hidden or dropped.
+    preview = {
+        cat: {"docs": docs[:PROJECT_DOCS_PREVIEW_LIMIT], "total": len(docs)}
+        for cat, docs in categories.items()
+    }
+    return render_page("project.html", page_title="Project Documentation", categories=preview)
+
+
+@bp.route("/project/expand/<cat_name>")
+def project_expand(cat_name):
+    """Remainder of a /project category, fetched on demand (T-2781)."""
+    categories = _build_project_categories()
+    docs = categories.get(cat_name, [])
+    return render_template("_project_docs_list.html", docs=docs[PROJECT_DOCS_PREVIEW_LIMIT:])
+
+
+@bp.route("/project/<doc>")
+def project_doc(doc):
+    if not re_mod.match(r"^[A-Za-z0-9_.-]+$", doc):
+        abort(404)
+
+    # T-2651 (OBS-097): fw-- prefixed doc_ids are framework-owned docs listed
+    # from FRAMEWORK_ROOT in split-root installs — route them back to that
+    # root, with containment checked against the SAME root below.
+    base_root = PROJECT_ROOT
+    if doc.startswith("fw--"):
+        base_root = FRAMEWORK_ROOT
+        doc = doc[len("fw--"):]
+
+    # Support -- as path separator for subdirectory docs
+    rel_base = doc.replace("--", "/")
+    doc_path = None
+    for ext in (".md", ".yaml", ".yml"):
+        candidate = base_root / (rel_base + ext)
+        if candidate.exists():
+            doc_path = candidate
+            break
+    if doc_path is None:
+        # Fallback: try direct .md match without -- expansion
+        doc_path = base_root / f"{doc}.md"
+    if not doc_path.exists():
+        abort(404)
+    # Ensure path is within the routing root
+    try:
+        doc_path.resolve().relative_to(base_root.resolve())
+    except ValueError:
+        abort(404)
+
+    content_md = doc_path.read_text()
+    if doc_path.suffix in (".yaml", ".yml"):
+        content_md = f"```yaml\n{content_md}\n```"
+    html_content = markdown2.markdown(
+        content_md, extras=["tables", "fenced-code-blocks", "code-friendly"]
+    )
+    # T-1723: artefact paths → /file/ anchors (existence-gated, idempotent).
+    html_content = _auto_link_files(html_content)
+
+    return render_page(
+        "project_doc.html", page_title=doc_path.stem, doc_name=doc_path.stem, html_content=html_content
+    )
+
+
+@bp.route("/directives")
+def directives():
+    directives_data = load_directives()
+    practices = load_practices()
+    decisions_list = load_decisions()
+    gaps_list = load_concerns()
+
+    for d in directives_data:
+        did = d["id"]
+        d["practices"] = [
+            p
+            for p in practices
+            if did
+            in (
+                p.get("derived_from", [])
+                if isinstance(p.get("derived_from"), list)
+                else [p.get("derived_from", "")]
+            )
+        ]
+        d["decisions"] = [dec for dec in decisions_list if did in dec.get("directives_served", [])]
+        d["gaps"] = [g for g in gaps_list if did in g.get("related_directives", [])]
+
+    return render_page(
+        "directives.html", page_title="Constitutional Directives", directives=directives_data
+    )

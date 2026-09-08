@@ -1,0 +1,33 @@
+# branch-hygiene
+
+> TODO: describe what this component does
+
+**Type:** script | **Subsystem:** framework-core | **Location:** `lib/branch-hygiene.sh`
+
+## What It Does
+
+lib/branch-hygiene.sh — T-100143 (C2 of T-100139 branch/worktree lifecycle GO)
+WARN-only branch hygiene scan. Prints one finding per line to stdout and
+prints NOTHING when the repo is tidy — callers (fw doctor) wrap findings in
+their own WARN formatting and count lines. Always exits 0: this is an
+advisory rail, never a gate.
+Judged against TARGET = origin/master when present, else master. Repos with
+no master lineage produce no findings (nothing to judge against).
+Finding classes (one token-prefixed line each):
+merged-undeleted <branch>                    local branch tip contained in TARGET
+behind-threshold <branch> behind=<n> days=<d> (threshold <t>)
+
+## Used By (6)
+
+| Component | Relationship | Description |
+|-----------|--------------|-------------|
+| [handover](/docs/generated/agents-handover-handover) | called_by | Handover Agent - Mechanical Operations |
+| [fw](/docs/generated/bin-fw) | called_by | Single entry point for all framework operations. Reads .framework.yaml from the project directory to resolve FRAMEWORK_ROOT, then routes commands to the appropriate agent. Supports both in-repo and shared tooling modes. |
+| [audit-yaml-validator](/docs/generated/audit-yaml-validator) | called_by | Validate all project YAML files parse correctly. Part of the audit structure section. Added as regression test after T-206 silent corruption. |
+| [integrate](/docs/generated/lib-integrate) | called_by | TODO: describe what this component does |
+| [t3187_branch_identity_guard](/docs/generated/tests-unit-t3187_branch_identity_guard) | tests_by | TODO: describe what this component does |
+| [audit-yaml-validator](/docs/generated/audit-yaml-validator) | called_by | Validate all project YAML files parse correctly. Part of the audit structure section. Added as regression test after T-206 silent corruption. |
+
+---
+*Auto-generated from Component Fabric. Card: `lib-branch-hygiene.yaml`*
+*Last verified: 2026-07-07*

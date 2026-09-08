@@ -1,0 +1,260 @@
+<style>
+/* Approval card base */
+.approval-card {
+    border: 2px solid var(--pico-muted-border-color);
+    border-radius: var(--pico-border-radius);
+    padding: 1rem;
+    margin: 0.75rem 0;
+    background: var(--pico-card-background-color);
+}
+.approval-card.pending {
+    border-color: var(--wt-warn);
+    background: color-mix(in srgb, var(--wt-warn) 3%, transparent);
+}
+.approval-card.approved {
+    border-color: var(--wt-success);
+    opacity: 0.7;
+}
+.approval-card.rejected {
+    border-color: var(--wt-danger);
+    opacity: 0.7;
+}
+.approval-card.expired {
+    border-color: var(--pico-muted-border-color);
+    opacity: 0.5;
+}
+.approval-risk {
+    font-weight: 700;
+    font-size: 0.95rem;
+    margin-bottom: 0.25rem;
+}
+.approval-command {
+    font-family: monospace;
+    font-size: 0.8rem;
+    background: var(--pico-code-background-color);
+    padding: 0.4rem 0.6rem;
+    border-radius: 3px;
+    word-break: break-all;
+    margin: 0.5rem 0;
+}
+.approval-meta {
+    font-size: 0.75rem;
+    color: var(--pico-muted-color);
+    margin-bottom: 0.5rem;
+}
+/* T-2111: callout for arc headline_mechanic in the Arc Closure section.
+   Previously rendered inside .approval-meta (0.75rem muted) — visually a
+   footnote despite being the central reviewer artefact. Same shape as
+   T-2110's arc_review.html: body text + left accent stripe on tinted
+   primary background. If a 3rd consumer lands, promote to shared CSS
+   (T-2102 applied the same "no premature promotion" rule). */
+.headline-mechanic-box {
+    padding: 0.6rem 1rem; background: var(--pico-primary-background);
+    color: var(--pico-color); border-left: 3px solid var(--pico-primary);
+    border-radius: 4px; margin: 0.5rem 0 0 0;
+    font-style: italic; line-height: 1.4;
+}
+.approval-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-start;
+    margin-top: 0.5rem;
+}
+.approval-actions button {
+    padding: 0.4rem 1rem;
+    font-size: 0.85rem;
+    margin: 0;
+}
+.btn-approve {
+    background: var(--wt-success);
+    border-color: var(--wt-success);
+    color: white;
+}
+.btn-approve:hover { background: color-mix(in srgb, var(--wt-success) 82%, #000); border-color: color-mix(in srgb, var(--wt-success) 82%, #000); }
+.btn-reject {
+    background: transparent;
+    border: 1px solid var(--wt-danger);
+    color: var(--wt-danger);
+}
+.btn-reject:hover { background: color-mix(in srgb, var(--wt-danger) 13%, transparent); }
+.approval-feedback {
+    width: 100%;
+    font-size: 0.8rem;
+    padding: 0.3rem 0.5rem;
+    min-height: 2rem;
+    margin: 0;
+    resize: vertical;
+}
+.status-badge {
+    display: inline-block;
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+}
+.badge-pending { background: color-mix(in srgb, var(--wt-warn) 13%, transparent); color: var(--wt-warn); border: 1px solid color-mix(in srgb, var(--wt-warn) 33%, transparent); }
+.badge-approved { background: color-mix(in srgb, var(--wt-success) 13%, transparent); color: var(--wt-success); border: 1px solid color-mix(in srgb, var(--wt-success) 33%, transparent); }
+.badge-rejected { background: color-mix(in srgb, var(--wt-danger) 13%, transparent); color: var(--wt-danger); border: 1px solid color-mix(in srgb, var(--wt-danger) 33%, transparent); }
+.badge-expired { background: color-mix(in srgb, var(--wt-muted) 13%, transparent); color: var(--wt-muted); border: 1px solid color-mix(in srgb, var(--wt-muted) 33%, transparent); }
+.empty-state {
+    text-align: center;
+    padding: 2rem;
+    color: var(--pico-muted-color);
+    font-size: 0.9rem;
+}
+
+/* Summary counts bar (T-639) */
+.approvals-summary {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    flex-wrap: wrap;
+}
+.approval-stat {
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    background: var(--pico-card-background-color);
+    border: 1px solid var(--pico-muted-border-color);
+    text-align: center;
+    min-width: 80px;
+    flex: 1;
+}
+.approval-stat .stat-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    display: block;
+}
+.approval-stat .stat-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    color: var(--pico-muted-color);
+}
+.approval-stat.total {
+    border-color: var(--pico-primary);
+}
+.approval-stat.tier0-active .stat-value { color: var(--wt-warn); }
+.approval-stat.go-active .stat-value { color: var(--wt-info); }
+.approval-stat.ac-active .stat-value { color: var(--wt-accent); }
+/* T-1416 (T-1388 B6 / F5): Decisions vs Verifications group visual */
+.approval-stat.decisions-active .stat-value { color: var(--wt-info); }
+.approval-stat-group { cursor: pointer; transition: border-color 0.15s; }
+.approval-stat-group:hover { border-color: var(--pico-primary); }
+.approval-stat .stat-breakdown {
+    display: block;
+    font-size: 0.65rem;
+    color: var(--pico-muted-color);
+    margin-top: 0.2rem;
+}
+.approvals-group-heading {
+    margin: 2rem 0 0.75rem;
+    padding-bottom: 0.25rem;
+    border-bottom: 2px solid var(--pico-muted-border-color);
+    font-size: 1.2rem;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--pico-muted-color);
+}
+.approvals-group-heading:first-of-type { margin-top: 0; }
+
+/* GO decision card */
+.approval-card.go-decision {
+    border-color: var(--wt-info);
+    background: color-mix(in srgb, var(--wt-info) 3%, transparent);
+}
+.decision-inline {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+    margin-top: 0.5rem;
+    flex-wrap: wrap;
+}
+.decision-inline label {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+    margin: 0;
+}
+.dec-go { color: var(--wt-success); font-weight: 700; }
+.dec-nogo { color: var(--wt-danger); font-weight: 700; }
+.dec-defer { color: var(--wt-muted); font-weight: 700; }
+
+/* Human AC group card */
+.approval-card.human-ac-group {
+    border-color: color-mix(in srgb, var(--wt-accent) 27%, transparent);
+    background: color-mix(in srgb, var(--wt-accent) 2%, transparent);
+}
+.ac-list {
+    list-style: none;
+    padding: 0;
+    margin: 0.5rem 0 0;
+}
+.ac-list li {
+    padding: 0.3rem 0;
+    font-size: 0.85rem;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.4rem;
+}
+.ac-list li form { display: inline; margin: 0; padding: 0; }
+.ac-list li input[type=checkbox] { margin: 0.15rem 0 0; }
+.ac-checked { text-decoration: line-through; opacity: 0.5; }
+.confidence-badge {
+    display: inline-block;
+    font-size: 0.55rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    padding: 0.05rem 0.3rem;
+    border-radius: 2px;
+    white-space: nowrap;
+}
+.badge-review { background: color-mix(in srgb, var(--wt-warn) 13%, transparent); color: var(--wt-warn); border: 1px solid color-mix(in srgb, var(--wt-warn) 33%, transparent); }
+.badge-rubber-stamp { background: color-mix(in srgb, var(--wt-success) 13%, transparent); color: var(--wt-success); border: 1px solid color-mix(in srgb, var(--wt-success) 33%, transparent); }
+.badge-startedwork { background: color-mix(in srgb, var(--wt-info) 13%, transparent); color: var(--wt-info); border: 1px solid color-mix(in srgb, var(--wt-info) 33%, transparent); }
+.badge-workcompleted { background: color-mix(in srgb, var(--wt-success) 13%, transparent); color: var(--wt-success); border: 1px solid color-mix(in srgb, var(--wt-success) 33%, transparent); }
+
+/* Section headers */
+.section-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 1.5rem 0 0.5rem;
+}
+.section-header h3 { margin: 0; }
+.section-header small { color: var(--pico-muted-color); font-weight: 400; }
+
+/* T-3200: continuous-run brake. Colour carries the state so it is readable at a
+   glance on a phone; the label repeats it in words so colour is never the only
+   channel. */
+.continuous-halt { padding: .75rem 1rem; margin-bottom: 1rem; border-left: 4px solid var(--pico-muted-border-color); }
+.continuous-halt.is-halted { border-left-color: var(--pico-del-color); }
+.continuous-halt.is-running { border-left-color: var(--pico-ins-color); }
+.continuous-halt__state { margin-bottom: .5rem; display: flex; gap: .6rem; align-items: baseline; flex-wrap: wrap; }
+.continuous-halt__state small { color: var(--pico-muted-color); }
+.continuous-halt form { margin: 0; }
+.continuous-halt button { width: auto; margin: 0; }
+.continuous-halt footer { margin-top: .5rem; }
+.continuous-halt footer small { color: var(--pico-muted-color); }
+</style>
+
+<div class="page-header">
+    <h1>Approvals {% if total_count %}<small>({{ total_count }} pending)</small>{% endif %}</h1>
+</div>
+
+{# T-3200: brake first — deliberately OUTSIDE the 10s polling container, so a
+   refresh can never blank it at the moment someone is reaching for it. #}
+{% include '_continuous_halt.html' %}
+
+<!-- Polling container: auto-refreshes every 10s (T-669)
+     hx-target="this" override required — base.html sets body-level hx-target="#content",
+     which would otherwise swap the polling response into the whole page area, destroying
+     the page-header and surrounding chrome (T-2060). -->
+<div id="approvals-content"
+     hx-get="/approvals/content"
+     hx-trigger="every 10s"
+     hx-target="this"
+     hx-swap="innerHTML">
+{% include '_approvals_content.html' %}
+</div><!-- /approvals-content polling container (T-669) -->

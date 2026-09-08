@@ -1,0 +1,291 @@
+"""Shared search utilities for Watchtower.
+
+Canonical implementations of file classification, title extraction,
+task ID parsing, file collection, and path-to-link resolution.
+
+T-376: Deduplicated from web/search.py and web/embeddings.py.
+"""
+from __future__ import annotations
+
+import logging
+import re
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+from web.shared import PROJECT_ROOT, mtime_cached_get
+
+
+def categorize(path_str: str) -> str:
+    """Classify a file path into a search result category."""
+    if ".tasks/active/" in path_str:
+        return "Active Tasks"
+    if ".tasks/completed/" in path_str:
+        return "Completed Tasks"
+    if ".context/episodic/" in path_str:
+        return "Episodic Memory"
+    if ".context/project/" in path_str:
+        return "Project Memory"
+    if ".context/qa/" in path_str:
+        return "Saved Answers"
+    if ".context/handovers/" in path_str:
+        return "Handovers"
+    if ".fabric/components/" in path_str:
+        return "Component Fabric"
+    if "docs/reports/" in path_str:
+        return "Research Reports"
+    if "/agents/" in path_str:
+        return "Agent Docs"
+    return "Specifications"
+
+
+def extract_title(path: Path, content: str) -> str:
+    """Extract a human-readable title from file content."""
+    name_match = re.search(r'^name:\s*["\']?(.+?)["\']?\s*$', content, re.MULTILINE)
+    if name_match:
+        return name_match.group(1).strip()
+
+    heading_match = re.search(r'^#\s+(.+)$', content, re.MULTILINE)
+    if heading_match:
+        return heading_match.group(1).strip()
+
+    return path.stem.replace("-", " ").replace("_", " ").title()
+
+
+def extract_task_id(path: Path, content: str) -> str:
+    """Extract T-XXX task ID from path or content."""
+    match = re.search(r"(T-\d+)", path.name)
+    if match:
+        return match.group(1)
+
+    match = re.search(r"^(?:id|task_id):\s*(T-\d+)", content, re.MULTILINE)
+    if match:
+        return match.group(1)
+
+    return ""
+
+
+# ── T-3024 (T-3022 slice E′): the inclusion set is defined by CONTENT CLASS ──
+#
+# Every path below belongs to exactly one of two classes. Adding a directory means
+# deciding which class it is, and that decision is the point — the previous list was
+# seven directories that accreted one at a time, each added because someone wanted a
+# specific thing findable, and nobody ever asked what the set as a whole should be.
+# The result was wrong in BOTH directions (T-3022 spike 8): 73 authored files were
+# unreachable — all of policy/, every ADR, the architecture/design/spec docs, including
+# the two documents CLAUDE.md explicitly tells agents to read — while 1,710 handovers
+# were indexed in full.
+#
+#   AUTHORED_AND_DURABLE — someone wrote it, deliberately, to be read later.
+#       Tasks, episodics, ADRs, standards, prompts, reports, specs, agent docs.
+#       These are what retrieval exists to find. IN.
+#
+#   GENERATED_OR_RESTATED — derived from other content, or a re-statement of live
+#       state that a query could answer directly. Rendered docs, generated indexes,
+#       session handovers (97% duplicated state — spike 10). OUT, with the single
+#       exception below, which is a switch rather than a silent omission.
+#
+# The rule cuts both ways on purpose: it is what stops "just index all of docs/"
+# from re-committing the original mistake by bulk-adding docs/generated's 1,068
+# generated files.
+
+INDEXED_SUFFIXES = (".md", ".yaml", ".yml")
+
+# Class: AUTHORED_AND_DURABLE.
+AUTHORED_DIRS = (
+    (".tasks",),
+    (".context", "episodic"),
+    (".context", "project"),
+    (".context", "qa"),
+    (".fabric", "components"),
+    ("docs", "reports"),
+    # T-3022 spike 8 — authored and previously unreachable.
+    ("policy",),
+    ("docs", "adr"),
+    ("docs", "architecture"),
+    ("docs", "design"),
+    ("docs", "specs"),
+    ("docs", "proposals"),
+    ("docs", "upstream-patterns"),
+    ("docs", "walkthrough"),
+    ("docs", "dispatch-templates"),
+    ("docs", "articles"),
+)
+
+# Class: GENERATED_OR_RESTATED. Named explicitly so the exclusion is auditable
+# rather than being an accident of what nobody added.
+EXCLUDED_DIRS = (
+    ("docs", "generated"),
+)
+
+# The one deliberate exception: handovers are GENERATED_OR_RESTATED by content, but
+# semantic retrieval is their only consumer (spike 7 — zero executable readers), so
+# excluding them removes the sole way anyone reaches them. That makes it a judgment
+# about what the corpus is for, not a cleanup, and therefore the operator's call.
+# Resolution order matches the framework's 4-tier contract: env > .framework.yaml >
+# default. Ships at ON, i.e. behaviour is unchanged until someone decides otherwise.
+HANDOVER_DIR = (".context", "handovers")
+
+
+def _index_handovers() -> bool:
+    """Resolve INDEX_HANDOVERS: env > .framework.yaml > default(1). See lib/config.sh."""
+    import os
+
+    env = os.environ.get("FW_INDEX_HANDOVERS")
+    if env is not None and env.strip() != "":
+        return env.strip() not in ("0", "false", "no")
+
+    cfg = PROJECT_ROOT / ".framework.yaml"
+    if cfg.is_file():
+        try:
+            for line in cfg.read_text(encoding="utf-8", errors="replace").splitlines():
+                m = re.match(r"^\s*INDEX_HANDOVERS\s*:\s*(\S+)", line)
+                if m:
+                    return m.group(1).strip().strip("\"'") not in ("0", "false", "no")
+        except OSError as exc:  # unreadable config must not silently drop the corpus
+            logger.warning("could not read %s for INDEX_HANDOVERS: %s", cfg, exc)
+
+    return True
+
+
+def collect_files() -> list[Path]:
+    """Collect all indexable files, selected by content class (T-3024).
+
+    See the AUTHORED_AND_DURABLE / GENERATED_OR_RESTATED commentary above: this is a
+    rule, not a list, and a new directory has to declare which class it belongs to.
+    """
+    files: list[Path] = []
+
+    dirs = list(AUTHORED_DIRS)
+    if _index_handovers():
+        dirs.append(HANDOVER_DIR)
+
+    excluded = tuple(PROJECT_ROOT.joinpath(*parts) for parts in EXCLUDED_DIRS)
+
+    for parts in dirs:
+        d = PROJECT_ROOT.joinpath(*parts)
+        if not d.exists():
+            continue
+        for f in d.rglob("*"):
+            if not f.is_file() or f.suffix not in INDEXED_SUFFIXES:
+                continue
+            if any(f.is_relative_to(x) for x in excluded):
+                continue
+            files.append(f)
+
+    # Top-level specs (CLAUDE.md, FRAMEWORK.md, README.md …) — authored by definition.
+    for f in PROJECT_ROOT.glob("*.md"):
+        files.append(f)
+
+    # Agent docs — the intelligence half of each agent, authored.
+    for f in PROJECT_ROOT.glob("agents/*/AGENT.md"):
+        files.append(f)
+
+    return files
+
+
+# T-1235: TTL cache for tag aggregation (was reading 1166 episodic files per /search load)
+import time as _time_mod
+
+_tag_cache = {"data": None, "ts": 0}
+_TAG_CACHE_TTL = 60  # seconds
+
+# T-2107/T-2109: per-file tag cache keyed on (path, mtime_ns). Survives the outer
+# _TAG_CACHE_TTL — when the 60s wrapper expires, we only re-parse files whose
+# mtime_ns changed (typically 0-2) instead of re-walking all 1166 episodic
+# files. Cold path still pays 5-6s once; warm rebuild now <100ms.
+# T-2109: migrated from local stat+cache logic to shared.mtime_cached_get.
+_TAG_FM_CACHE: dict[str, tuple[int, list[str]]] = {}
+
+
+def _parse_tags_from_path(path: Path) -> list[str]:
+    """Read one episodic YAML and extract its tag list. Empty list on any failure."""
+    import yaml as _yaml
+    try:
+        with open(path) as fh:
+            data = _yaml.safe_load(fh)
+    except Exception as e:
+        logger.warning("Failed to parse episodic file %s: %s", path, e)
+        return []
+    tags: list[str] = []
+    if isinstance(data, dict):
+        for tag in data.get("tags", []) or []:
+            t = str(tag).strip()
+            if t:
+                tags.append(t)
+    return tags
+
+
+def _episodic_tags_for(path: Path) -> list[str]:
+    """Return tag list for one episodic file, mtime-invalidated.
+
+    T-2109: migrated to shared.mtime_cached_get; semantics unchanged.
+    """
+    return mtime_cached_get(path, _parse_tags_from_path, _TAG_FM_CACHE, default=[])
+
+
+def aggregate_tags(limit: int = 30) -> list[dict]:
+    """Aggregate tags from episodic memory for the tag cloud (T-392).
+
+    Returns a list of {"tag": str, "count": int} sorted by count descending.
+    Excludes low-value tags (single-char, pure IDs like D-001, P-001).
+    T-1235: Cached for 60s to avoid re-reading 1166 files per request.
+    T-2107: per-file mtime cache (_TAG_FM_CACHE) survives TTL — when the
+    wrapper expires we only re-parse changed files.
+    """
+    now = _time_mod.monotonic()
+    if _tag_cache["data"] is not None and (now - _tag_cache["ts"]) < _TAG_CACHE_TTL:
+        return _tag_cache["data"][:limit]
+
+    counts: dict[str, int] = {}
+    ep_dir = PROJECT_ROOT / ".context" / "episodic"
+    if ep_dir.exists():
+        for f in ep_dir.glob("T-*.yaml"):
+            for tag in _episodic_tags_for(f):
+                counts[tag] = counts.get(tag, 0) + 1
+
+    # Filter out noise: single-char, pure directive refs (D1, D2), policy refs (P-xxx)
+    skip = re.compile(r'^(D\d|P-\d|[A-Z]-\d|.{0,2})$')
+    filtered = [
+        {"tag": t, "count": c}
+        for t, c in counts.items()
+        if not skip.match(t) and c >= 2
+    ]
+    filtered.sort(key=lambda x: (-x["count"], x["tag"]))
+    _tag_cache["data"] = filtered
+    _tag_cache["ts"] = now
+    return filtered[:limit]
+
+
+def path_to_link(path: str) -> str:
+    """Convert a project-relative file path to a Watchtower URL.
+
+    Mirrors the JS pathToLink() function from search.html.
+    Registered as a Jinja2 filter for use in templates.
+    """
+    if not path:
+        return ""
+
+    if path.startswith(".tasks/") and "/T-" in path:
+        m = re.search(r"/T-(\d+)", path)
+        return f"/tasks/T-{m.group(1)}" if m else ""
+
+    if path.startswith(".fabric/components/"):
+        comp_id = path.split("/")[-1].replace(".yaml", "")
+        return f"/fabric/component/{comp_id}"
+
+    if path.startswith(".context/episodic/") and path.endswith(".yaml"):
+        task_ref = path.split("/")[-1].replace(".yaml", "")
+        return f"/tasks/{task_ref}"
+
+    if path == ".context/project/learnings.yaml":
+        return "/learnings"
+    if path == ".context/project/patterns.yaml":
+        return "/patterns"
+    if path == ".context/project/decisions.yaml":
+        return "/decisions"
+
+    if path.endswith(".md") and not path.startswith("."):
+        return "/project/" + path.replace(".md", "").replace("/", "--")
+
+    return ""

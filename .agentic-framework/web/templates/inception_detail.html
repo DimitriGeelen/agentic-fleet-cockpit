@@ -1,0 +1,594 @@
+<style>
+    .decision-banner {
+        padding: 1rem 1.5rem;
+        border-radius: 8px;
+        margin-bottom: 1.5rem;
+        font-weight: 600;
+        font-size: 1.1rem;
+    }
+    .decision-banner.go { background: rgba(46, 125, 50, 0.15); border-left: 4px solid #2e7d32; color: #2e7d32; }
+    .decision-banner.no-go { background: rgba(198, 40, 40, 0.15); border-left: 4px solid #c62828; color: #c62828; }
+    .decision-banner.defer { background: rgba(249, 168, 37, 0.15); border-left: 4px solid #f9a825; color: #795548; }
+    .decision-banner.pending { background: rgba(21, 101, 192, 0.1); border-left: 4px solid #1565c0; color: var(--pico-color); }
+    .section-card {
+        margin-bottom: 1rem;
+    }
+    .section-card header {
+        font-weight: 600;
+    }
+    .section-content {
+        font-size: 0.9rem;
+        line-height: 1.6;
+    }
+    .section-content p { margin-bottom: 0.5rem; }
+    .section-content ul, .section-content ol { margin: 0.25rem 0 0.5rem 1.25rem; }
+    .section-content code { font-size: 0.85em; }
+    .assumption-card {
+        padding: 0.75rem 1rem;
+        border-radius: 6px;
+        margin-bottom: 0.5rem;
+        border: 1px solid var(--pico-muted-border-color);
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 1rem;
+    }
+    .assumption-status {
+        display: inline-block;
+        padding: 0.1rem 0.5rem;
+        border-radius: 4px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        white-space: nowrap;
+    }
+    .status-validated { background-color: #2e7d32; color: white; }
+    .status-invalidated { background-color: #c62828; color: white; }
+    .status-untested { background-color: #f9a825; color: #333; }
+    .meta-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 0.75rem;
+        margin-bottom: 1.5rem;
+        font-size: 0.85rem;
+    }
+    .meta-item {
+        padding: 0.5rem 0.75rem;
+        border-radius: 6px;
+        background: var(--pico-card-background-color);
+        border: 1px solid var(--pico-muted-border-color);
+    }
+    .meta-item .meta-label {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        color: var(--pico-muted-color);
+        letter-spacing: 0.05em;
+    }
+    .criteria-list {
+        margin: 0.5rem 0;
+    }
+    .criteria-list li {
+        margin-bottom: 0.25rem;
+    }
+    .back-link {
+        font-size: 0.85rem;
+        margin-bottom: 1rem;
+        display: block;
+    }
+    .action-btn {
+        padding: 0.2rem 0.5rem;
+        font-size: 0.7rem;
+        border-radius: 4px;
+        cursor: pointer;
+        border: 1px solid;
+        font-weight: 600;
+        text-transform: uppercase;
+    }
+    .btn-validate { background: transparent; color: #2e7d32; border-color: #2e7d32; }
+    .btn-validate:hover { background: #2e7d32; color: white; }
+    .btn-invalidate { background: transparent; color: #c62828; border-color: #c62828; }
+    .btn-invalidate:hover { background: #c62828; color: white; }
+    .evidence-form {
+        margin-top: 0.5rem;
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+    }
+    .evidence-form input[type="text"] {
+        margin-bottom: 0;
+        padding: 0.25rem 0.5rem;
+        font-size: 0.8rem;
+        flex: 1;
+    }
+    .evidence-form button {
+        margin-bottom: 0;
+        padding: 0.25rem 0.75rem;
+        font-size: 0.8rem;
+        white-space: nowrap;
+    }
+    .add-assumption-form {
+        margin-top: 0.75rem;
+        display: flex;
+        gap: 0.5rem;
+    }
+    .add-assumption-form input[type="text"] {
+        margin-bottom: 0;
+        padding: 0.3rem 0.5rem;
+        font-size: 0.85rem;
+        flex: 1;
+    }
+    .add-assumption-form button {
+        margin-bottom: 0;
+        padding: 0.3rem 0.75rem;
+        font-size: 0.85rem;
+        white-space: nowrap;
+    }
+    .decision-form {
+        margin-top: 1rem;
+        padding: 1rem;
+        border-radius: 8px;
+        background: var(--pico-card-background-color);
+        border: 1px solid var(--pico-muted-border-color);
+    }
+    .decision-buttons {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 0.75rem;
+    }
+    .decision-buttons label {
+        padding: 0.4rem 1rem;
+        border-radius: 6px;
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 0.85rem;
+        border: 2px solid;
+        transition: all 0.15s;
+    }
+    .decision-buttons input[type="radio"] { display: none; }
+    .decision-buttons input[type="radio"]:checked + .dec-go { background: #2e7d32; color: white; border-color: #2e7d32; }
+    .decision-buttons input[type="radio"]:checked + .dec-nogo { background: #c62828; color: white; border-color: #c62828; }
+    .decision-buttons input[type="radio"]:checked + .dec-defer { background: #f9a825; color: #333; border-color: #f9a825; }
+    .dec-go { color: #2e7d32; border-color: #2e7d32; }
+    .dec-nogo { color: #c62828; border-color: #c62828; }
+    .dec-defer { color: #f9a825; border-color: #f9a825; }
+    /* ── Reviewer Verdict block (T-1585) ─────────────────── */
+    /* Cross-surface parity with /review, /tasks, /approvals — same palette. */
+    .reviewer-verdict-block {
+        border-radius: 8px; padding: 0.75rem 1rem;
+        margin: 0.75rem 0 1rem 0;
+        border: 1px solid var(--pico-muted-border-color);
+        background: var(--pico-card-background-color);
+    }
+    .reviewer-verdict-block h4 {
+        margin: 0 0 0.4rem 0; font-size: 0.9rem; font-weight: 600; text-transform: none;
+    }
+    .reviewer-verdict-block .reviewer-meta {
+        font-size: 0.8rem; color: var(--pico-muted-color);
+    }
+    .reviewer-verdict-block[data-reviewer-overall="PASS"] {
+        background: #ecfdf5; border-color: #10b981;
+    }
+    .reviewer-verdict-block[data-reviewer-overall="PASS"] h4 { color: #065f46; }
+    .reviewer-verdict-block[data-reviewer-overall="FAIL"] {
+        background: #fef2f2; border-color: #dc2626;
+    }
+    .reviewer-verdict-block[data-reviewer-overall="FAIL"] h4 { color: #991b1b; }
+    .reviewer-verdict-block[data-reviewer-overall="WARN"] {
+        background: #fffbeb; border-color: #f59e0b;
+    }
+    .reviewer-verdict-block[data-reviewer-overall="WARN"] h4 { color: #92400e; }
+    .reviewer-verdict-block .needs-human-flag {
+        display: inline-block; margin-left: 0.4rem; padding: 0.1rem 0.4rem;
+        border-radius: 4px; background: #fde68a; color: #78350f;
+        font-size: 0.7rem; font-weight: 600;
+    }
+    /* ── Recommendation Verdict block (T-100188, claims validator T-100187) ── */
+    .claims-verdict-block {
+        border-radius: 8px; padding: 0.75rem 1rem;
+        margin: 0.75rem 0 1rem 0;
+        border: 1px solid var(--pico-muted-border-color);
+        background: var(--pico-card-background-color);
+    }
+    .claims-verdict-block h4 {
+        margin: 0 0 0.4rem 0; font-size: 0.9rem; font-weight: 600; text-transform: none;
+    }
+    .claims-verdict-block[data-claims-overall="CONFIRMED"] {
+        background: #ecfdf5; border-color: #10b981;
+    }
+    .claims-verdict-block[data-claims-overall="CONFIRMED"] h4 { color: #065f46; }
+    .claims-verdict-block[data-claims-overall="CONTRADICTED"] {
+        background: #fef2f2; border-color: #dc2626;
+    }
+    .claims-verdict-block[data-claims-overall="CONTRADICTED"] h4 { color: #991b1b; }
+    .claims-verdict-block[data-claims-overall="UNVERIFIED"] {
+        background: #fffbeb; border-color: #f59e0b;
+    }
+    .claims-verdict-block[data-claims-overall="UNVERIFIED"] h4 { color: #92400e; }
+    .claims-verdict-block table {
+        margin: 0.4rem 0 0 0; font-size: 0.8rem;
+    }
+    .claims-verdict-block td, .claims-verdict-block th {
+        padding: 0.2rem 0.6rem;
+    }
+    .claims-verdict-block .claim-pass { color: #065f46; }
+    .claims-verdict-block .claim-fail { color: #991b1b; font-weight: 600; }
+    .claims-verdict-block .claim-unverifiable { color: #92400e; }
+</style>
+
+<a href="/inception" class="back-link" hx-target="#content" hx-swap="innerHTML" hx-push-url="true">&larr; All Inceptions</a>
+
+<div class="page-header">
+    <h1><code>{{ task_id }}</code>: {{ task.name }}</h1>
+    {# T-2624 read-value wiring: inception decisions live in the inception-flow /
+       task-lifecycle process context. Bare ?load resolves server-latest (T-2599
+       nonce 302). hx-boost off: the editor is a standalone app, not an htmx
+       partial (same rule as the designer landing cards). #}
+    <p style="margin:0.25rem 0 0; font-size:0.85rem;">
+        <a href="/designer/app?load=%2Fapi%2Fversion%3Fid%3Daef-task-lifecycle" hx-boost="false"
+           title="aef-task-lifecycle — where this decision sits in the process">workflow map</a>
+    </p>
+</div>
+
+<!-- Decision banner -->
+{% set dec = decision_state | lower %}
+{% if dec == 'go' %}
+<div class="decision-banner go">Decision: GO</div>
+{% elif dec in ('no-go', 'no_go') %}
+<div class="decision-banner no-go">Decision: NO-GO</div>
+{% elif dec == 'defer' %}
+<div class="decision-banner defer">Decision: DEFER — exploration continues</div>
+{% else %}
+<div class="decision-banner pending">Decision pending — exploration in progress</div>
+{% endif %}
+
+<!-- Metadata -->
+<div class="meta-grid">
+    <div class="meta-item">
+        <div class="meta-label">Status</div>
+        <div>{{ task.status }}</div>
+    </div>
+    <div class="meta-item">
+        <div class="meta-label">Owner</div>
+        <div>{{ task.owner | default('unassigned') }}</div>
+    </div>
+    <div class="meta-item">
+        <div class="meta-label">Created</div>
+        <div>{{ task.created | default('unknown') }}</div>
+    </div>
+    {% if task.date_finished %}
+    <div class="meta-item">
+        <div class="meta-label">Finished</div>
+        <div>{{ task.date_finished }}</div>
+    </div>
+    {% endif %}
+    <div class="meta-item">
+        <div class="meta-label">Assumptions</div>
+        <div>{{ linked_assumptions | length }}</div>
+    </div>
+</div>
+
+<!-- Problem Statement -->
+{% if sections.problem %}
+<article class="section-card">
+    <header>Problem Statement</header>
+    <div class="section-content">{{ sections.problem }}</div>
+</article>
+{% endif %}
+
+<!-- Context (T-2077: T-2066 GO scope) -->
+{% if sections.context %}
+<article class="section-card">
+    <header>Context</header>
+    <div class="section-content">{{ sections.context }}</div>
+</article>
+{% endif %}
+
+<!-- Linked Assumptions -->
+<article class="section-card">
+    <header>Assumptions ({{ linked_assumptions | length }})</header>
+    {% for a in linked_assumptions %}
+    <div class="assumption-card" id="assumption-{{ a.id }}">
+        <div class="flex-1">
+            <code>{{ a.id }}</code> &mdash; {{ a.statement }}
+            {% if a.evidence %}
+            <div style="font-size: 0.8rem; color: var(--pico-muted-color); margin-top: 0.25rem;">
+                {% for e in a.evidence %}
+                <div>Evidence: {{ e.outcome }} ({{ e.date }})</div>
+                {% endfor %}
+            </div>
+            {% endif %}
+            {% if a.status == 'untested' %}
+            <details style="margin-top: 0.4rem;">
+                <summary style="font-size: 0.75rem; cursor: pointer;">Resolve this assumption...</summary>
+                <form action="/assumptions/{{ a.id }}/resolve" method="post" class="evidence-form">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="redirect" value="/inception/{{ task_id }}">
+                    <input type="text" name="evidence" placeholder="Evidence..." required>
+                    <button type="submit" name="action" value="validate" class="action-btn btn-validate">Validate</button>
+                    <button type="submit" name="action" value="invalidate" class="action-btn btn-invalidate">Invalidate</button>
+                </form>
+            </details>
+            {% endif %}
+        </div>
+        <div>
+            <span class="assumption-status status-{{ a.status|default('untested') }}">{{ a.status|default('untested')|capitalize }}</span>
+        </div>
+    </div>
+    {% endfor %}
+    {% if task._location == 'active' %}
+    <form action="/inception/{{ task_id }}/add-assumption" method="post" class="add-assumption-form">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <input type="text" name="statement" placeholder="New assumption to test..." required>
+        <button type="submit">Add Assumption</button>
+    </form>
+    {% endif %}
+</article>
+
+<!-- Exploration Plan -->
+{% if sections.exploration %}
+<article class="section-card">
+    <header>Exploration Plan</header>
+    <div class="section-content">{{ sections.exploration }}</div>
+</article>
+{% endif %}
+
+<!-- Technical Constraints -->
+{% if sections.constraints %}
+<article class="section-card">
+    <header>Technical Constraints</header>
+    <div class="section-content">{{ sections.constraints }}</div>
+</article>
+{% endif %}
+
+<!-- Scope Fence -->
+{% if sections.scope %}
+<article class="section-card">
+    <header>Scope Fence</header>
+    <div class="section-content">{{ sections.scope }}</div>
+</article>
+{% endif %}
+
+<!-- Go/No-Go Criteria -->
+{% if sections.criteria %}
+<article class="section-card">
+    <header>Go/No-Go Criteria</header>
+    <div class="section-content">{{ sections.criteria }}</div>
+</article>
+{% endif %}
+
+<!-- Acceptance Criteria (T-2077: T-2066 GO scope) -->
+{% if sections.acceptance_criteria %}
+<article class="section-card">
+    <header>Acceptance Criteria</header>
+    <div class="section-content">{{ sections.acceptance_criteria }}</div>
+</article>
+{% endif %}
+
+<!-- Verification (T-2077: T-2066 GO scope) -->
+{% if sections.verification %}
+<article class="section-card">
+    <header>Verification</header>
+    <div class="section-content">{{ sections.verification }}</div>
+</article>
+{% endif %}
+
+<!-- Decisions (T-2077: T-2066 GO scope) — distinct from singular "Decision" (GO/NO-GO/DEFER) -->
+{% if sections.decisions %}
+<article class="section-card">
+    <header>Decisions</header>
+    <div class="section-content">{{ sections.decisions }}</div>
+</article>
+{% endif %}
+
+<!-- Agent Recommendation (T-679, T-1391 F3 dedupe) -->
+{% if sections.recommendation %}
+    {% if dec == 'pending' %}
+        {# Pending: Recommendation is the human's primary input — show prominently. #}
+        <article class="section-card">
+            <header>Agent Recommendation</header>
+            <div class="section-content">{{ sections.recommendation }}</div>
+        </article>
+    {% elif decision_matches_recommendation %}
+        {# Adopted: Decision carries the signal — collapse Recommendation for inspection. #}
+        <details class="section-card" style="padding: 0.75rem 1rem;">
+            <summary style="font-weight: 600; cursor: pointer;">
+                Agent Recommendation: <strong>{{ rec_stance | upper }}</strong>
+                <span style="font-weight: 400; color: var(--pico-muted-color); font-size: 0.85rem;">
+                    — adopted by human, see Decision Record
+                </span>
+            </summary>
+            <div class="section-content" style="margin-top: 0.75rem;">{{ sections.recommendation }}</div>
+        </details>
+    {% else %}
+        {# Overridden: both must be visible with explicit labels so the override is unambiguous. #}
+        <article class="section-card" style="border-left: 4px solid #f9a825;">
+            <header>
+                Agent Recommendation: <strong>{{ rec_stance | upper if rec_stance else '?' }}</strong>
+                <span style="font-weight: 400; color: #c62828; font-size: 0.85rem;">
+                    — overridden by human decision ({{ dec | upper }})
+                </span>
+            </header>
+            <div class="section-content">{{ sections.recommendation }}</div>
+        </article>
+    {% endif %}
+{% endif %}
+
+{# T-100188: Recommendation Verdict — mechanical check of the evidence claims
+   inside ## Recommendation (claims validator T-100187). Rendered directly
+   under the Agent Recommendation; silently absent when no
+   `## Recommendation Verdict (vX.Y)` block exists. Display-only. #}
+{% if claims_verdict and claims_verdict.overall %}
+<section class="claims-verdict-block" data-claims-overall="{{ claims_verdict.overall }}">
+    <h4>Evidence Claims — {{ claims_verdict.overall }}
+        <span style="font-weight: 400; font-size: 0.8rem;">({{ claims_verdict.passed }}/{{ claims_verdict.total }} confirmed)</span>
+    </h4>
+    {% if claims_verdict.claims %}
+    <div style="overflow-x: auto;">
+    <table>
+        <thead><tr><th>Claim</th><th>Type</th><th>Status</th></tr></thead>
+        <tbody>
+        {% for c in claims_verdict.claims %}
+        <tr>
+            <td><code>{{ c.raw }}</code></td>
+            <td>{{ c.kind }}</td>
+            <td class="claim-{{ c.status }}">{{ c.status }}{% if c.detail %} — {{ c.detail }}{% endif %}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% endif %}
+</section>
+{% endif %}
+
+{# T-1585: Reviewer Verdict — cross-surface parity with /approvals (T-1569),
+   /review (T-1583), /tasks (T-1584). Independent mechanical second opinion;
+   silently absent on tasks without a `## Reviewer Verdict (vX.Y)` section. #}
+{% if reviewer and reviewer.overall %}
+<section class="reviewer-verdict-block" data-reviewer-overall="{{ reviewer.overall }}">
+    <h4>Reviewer — {{ reviewer.overall }}{% if reviewer.needs_human %}<span class="needs-human-flag">needs human</span>{% endif %}</h4>
+    <div class="reviewer-meta">
+        {% if reviewer.findings == 0 %}No findings.{% else %}{{ reviewer.findings }} finding{{ 's' if reviewer.findings != 1 else '' }} — see Reviewer Verdict block in raw body below.{% endif %}
+    </div>
+</section>
+{% endif %}
+
+<!-- Structural Upgrade (T-1108, added per T-1105 chokepoint+invariant-test discipline) -->
+{% if sections.structural_upgrade %}
+<article class="section-card">
+    <header>Structural Upgrade</header>
+    <div class="section-content">{{ sections.structural_upgrade }}</div>
+</article>
+{% endif %}
+
+<!-- RCA (T-2077: T-2066 GO scope) — bug-class incidents that triggered the inception -->
+{% if sections.rca %}
+<article class="section-card">
+    <header>RCA</header>
+    <div class="section-content">{{ sections.rca }}</div>
+</article>
+{% endif %}
+
+<!-- Dynamic extra sections (T-1177, G-036 fix) -->
+{% for sec in extra_sections %}
+<article class="section-card">
+    <header>{{ sec.heading }}</header>
+    <div class="section-content">{{ sec.content }}</div>
+</article>
+{% endfor %}
+
+<!-- Decision Details + Re-decide form (T-1389 B2 — G-057) -->
+{% if sections.decision and dec != 'pending' %}
+<article class="section-card">
+    <header>Decision Record</header>
+    <div class="section-content">{{ sections.decision }}</div>
+</article>
+{% endif %}
+
+{# T-3180: the close card. A decided inception still sitting in active/ needs exactly
+   one thing — closing — and until now that action existed on no page. /review/<id>
+   302s here, so both routes landed on a form that only re-decides. This card is
+   deliberately ABOVE the superseding-decision form: the common case for a decided
+   inception is finishing it, not changing your mind, and putting the rarer action
+   first is what made the operator feel re-asked. #}
+{% if decided_unclosed %}
+<article class="section-card" id="close-inception" style="border-left:4px solid #10b981;">
+    <header>Decision recorded — one step left</header>
+    <p style="font-size:0.9rem; margin-bottom:0.75rem;">
+        You decided this: <strong>{{ dec | upper }}</strong>. The task is still in
+        <code>active/</code>. Closing it runs the same path as
+        <code>fw task update --status work-completed</code>, so every gate still fires —
+        if one refuses, the reason appears below rather than the task closing quietly.
+    </p>
+    <div id="complete-button">
+    <form hx-post="/api/task/{{ task_id }}/complete" hx-target="#complete-result" hx-swap="innerHTML">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="primary"
+                style="background:#10b981; border-color:#10b981; padding:0.5rem 1.5rem;">
+            Close {{ task_id }}
+        </button>
+    </form>
+    </div>
+    <div id="complete-result"></div>
+</article>
+{% endif %}
+
+{% if task._location == 'active' %}
+<article class="section-card">
+    <header>{% if dec == 'pending' %}Record Decision{% else %}Record Superseding Decision{% endif %}</header>
+    {% if request.args.get('error') %}
+    <div role="alert" style="background: var(--pico-del-color, #fee); border: 1px solid #c33; color: #800; padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 0.75rem; font-size: 0.85rem;">
+        <strong>Decision NOT recorded.</strong>
+        <code style="display: block; margin-top: 0.4rem; white-space: pre-wrap; background: rgba(255,255,255,0.5); padding: 0.4rem; border-radius: 4px;">{{ request.args.get('error') }}</code>
+        <p style="margin: 0.4rem 0 0 0; font-size: 0.8rem; opacity: 0.85;">
+            Common causes: required Acceptance Criteria still unchecked, sovereignty gate, or task review marker missing.
+            Re-submit after addressing the cause; previous attempts did NOT persist.
+        </p>
+    </div>
+    {% endif %}
+    {# T-1746: warning banner for partial-success path (primary decision landed, side-effect failed). #}
+    {# Without this block the `?warning=` redirect from the decide handler renders nothing — the user #}
+    {# sees a clean reload and assumes success. T-1745 RCA RC3. #}
+    {% if request.args.get('warning') %}
+    <div role="alert" style="background: #fef3c7; border: 1px solid #f59e0b; color: #78350f; padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 0.75rem; font-size: 0.85rem;">
+        <strong>Decision recorded with warning.</strong>
+        <code style="display: block; margin-top: 0.4rem; white-space: pre-wrap; background: rgba(255,255,255,0.5); padding: 0.4rem; border-radius: 4px;">{{ request.args.get('warning') }}</code>
+        <p style="margin: 0.4rem 0 0 0; font-size: 0.8rem; opacity: 0.85;">
+            The primary decision landed, but a side-effect (episodic generation, review emit) reported a warning.
+            Verify the <code>## Decision</code> block on this task before continuing.
+        </p>
+    </div>
+    {% endif %}
+    {% if dec != 'pending' %}
+    <p style="font-size: 0.85rem; color: var(--pico-muted-color); margin-bottom: 0.75rem;">
+        Current decision: <strong>{{ dec | upper }}</strong>. Recording a new decision replaces the
+        canonical <code>## Decision</code> block and appends a new entry to <code>## Updates</code>
+        preserving audit trail.
+    </p>
+    {% endif %}
+    <form action="/inception/{{ task_id }}/decide" method="post" class="decision-form">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <div class="decision-buttons">
+            <label><input type="radio" name="decision" value="go" {% if dec == 'pending' %}required{% endif %}><span class="dec-go">GO</span></label>
+            <label><input type="radio" name="decision" value="no-go"><span class="dec-nogo">NO-GO</span></label>
+            <label><input type="radio" name="decision" value="defer"><span class="dec-defer">DEFER</span></label>
+        </div>
+        <textarea name="rationale" placeholder="{% if dec == 'pending' %}Rationale for this decision...{% else %}Rationale for superseding the previous decision...{% endif %}" required
+                  style="font-size: 0.85rem; min-height: 60px; margin-bottom: 0.5rem;">{{ rationale_hint or '' }}</textarea>
+        <button type="submit" class="text-sm">{% if dec == 'pending' %}Record Decision{% else %}Record Superseding Decision{% endif %}</button>
+    </form>
+</article>
+{% endif %}
+
+<!-- Updates Log -->
+{% if sections.updates %}
+<details class="mt-2">
+    <summary>Update Log</summary>
+    <div class="section-content" style="font-size: 0.85rem; margin-top: 0.75rem;">{{ sections.updates }}</div>
+</details>
+{% endif %}
+
+<!-- Episodic Memory -->
+{% if episodic %}
+<details style="margin-top: 1rem;">
+    <summary>Episodic Memory</summary>
+    <div style="margin-top: 0.75rem; font-size: 0.85rem;">
+        {% if episodic.summary %}
+        <p>{{ episodic.summary }}</p>
+        {% endif %}
+        {% if episodic.outcomes %}
+        <p><strong>Outcomes:</strong></p>
+        <ul>
+            {% for o in episodic.outcomes %}
+            <li>{{ o }}</li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+        {% if episodic.tags %}
+        <p class="text-muted">
+            Tags: {% for tag in episodic.tags %}<code>{{ tag }}</code> {% endfor %}
+        </p>
+        {% endif %}
+    </div>
+</details>
+{% endif %}

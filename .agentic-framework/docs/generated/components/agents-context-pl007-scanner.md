@@ -1,0 +1,36 @@
+# pl007-scanner
+
+> PostToolUse hook scanning Bash output for bare-command leakage patterns (PL-007); injects reminder when agent risks relaying raw commands to user instead of using fw task review / termlink inject push-channels
+
+**Type:** script | **Subsystem:** context-fabric | **Location:** `agents/context/pl007-scanner.sh`
+
+**Tags:** `hook`, `posttool`, `governance`
+
+## What It Does
+
+REFERENCE ONLY — not registered in .claude/settings.json (see T-1459)
+PL-007 Scanner — PostToolUse hook that flags bare command patterns in Bash output
+When a Bash tool result contains text that looks like a command the agent might
+relay verbatim to the user (e.g. `fw inception decide T-XXX go`), inject a
+reminder that PL-007 says: DO NOT output bare commands; execute them or use the
+push-based delivery channel (fw task review / termlink inject).
+Detection strategy:
+1. Only fires for Bash tool calls.
+2. Skips when the agent's own command string already contains the pattern
+(i.e. the agent ran `fw inception decide ...` — not relaying, executing).
+
+## Dependencies (1)
+
+| Component | Relationship | Description |
+|-----------|--------------|-------------|
+| [fw](/docs/generated/bin-fw) | calls | Single entry point for all framework operations. Reads .framework.yaml from the project directory to resolve FRAMEWORK_ROOT, then routes commands to the appropriate agent. Supports both in-repo and shared tooling modes. |
+
+## Used By (1)
+
+| Component | Relationship | Description |
+|-----------|--------------|-------------|
+| [hook-config](/docs/generated/hook-config) | registered_in | Claude Code hook wiring. Defines which scripts run on PreToolUse and PostToolUse events, with matcher patterns. |
+
+---
+*Auto-generated from Component Fabric. Card: `agents-context-pl007-scanner.yaml`*
+*Last verified: 2026-04-24*

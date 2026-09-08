@@ -1,0 +1,523 @@
+#!/bin/bash
+# Context Agent - generate-episodic command
+# Generate rich episodic summary for a completed task
+#
+# Hybrid approach (D-023): Git owns timeline/metrics/artifacts,
+# task file owns AC + decisions, episodic merges both automatically.
+
+# T-2731: declare our own dependency rather than assuming the caller sourced
+# lib/paths.sh first. context.sh does; tests/unit/context_episodic.bats sources
+# this file directly and did not, so get_yaml_field was undefined and every
+# frontmatter field came back empty. lib/yaml.sh guards against double-sourcing.
+if ! declare -F get_yaml_field >/dev/null 2>&1; then
+    source "${FRAMEWORK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}/lib/yaml.sh"
+fi
+
+# =============================================================================
+# Git-mining helper functions
+# =============================================================================
+
+# Extract commit messages as timeline (timestamp + subject)
+mine_git_timeline() {
+    local task_id="$1"
+    git -C "$PROJECT_ROOT" log --all --grep="^${task_id}:" \
+        --format="%ai %s" --reverse 2>/dev/null || true
+}
+
+# Extract challenges: commits with fix/revert/bug/error keywords
+mine_git_challenges() {
+    local task_id="$1"
+    git -C "$PROJECT_ROOT" log --all --grep="^${task_id}:" \
+        --format="%s" 2>/dev/null | \
+        grep -iE "fix|revert|bug|issue|error" | \
+        sed "s/^${task_id}: //" || true
+}
+
+# Extract unique files changed across all task commits
+mine_git_artifacts() {
+    local task_id="$1"
+    git -C "$PROJECT_ROOT" log --all --grep="^${task_id}:" \
+        --name-only --format="" 2>/dev/null | \
+        sort -u | grep -v '^$' || true
+}
+
+# Deduplicated commit messages (strip task prefix)
+mine_git_summary() {
+    local task_id="$1"
+    git -C "$PROJECT_ROOT" log --all --grep="^${task_id}:" \
+        --format="%s" --reverse 2>/dev/null | \
+        sed "s/^${task_id}: //" | \
+        awk '!seen[$0]++' || true
+}
+
+# First and last commit timestamps (more accurate than frontmatter)
+mine_git_timestamps() {
+    local task_id="$1"
+    local first last
+    first=$(git -C "$PROJECT_ROOT" log --all --grep="^${task_id}:" \
+        --format="%aI" --reverse 2>/dev/null | head -1)
+    last=$(git -C "$PROJECT_ROOT" log --all --grep="^${task_id}:" \
+        --format="%aI" 2>/dev/null | head -1)
+    echo "${first:-}|${last:-}"
+}
+
+# =============================================================================
+# Main generator
+# =============================================================================
+
+do_generate_episodic() {
+    ensure_context_dirs
+
+    local task_id="${1:-}"
+
+    if [ -z "$task_id" ]; then
+        echo -e "${RED}Error: Task ID required${NC}"
+        echo "Usage: $0 generate-episodic T-XXX"
+        exit 1
+    fi
+
+    # Find task file (searches active then completed via lib/tasks.sh)
+    local task_file=$(find_task_file "$task_id")
+
+    if [ -z "$task_file" ]; then
+        echo -e "${RED}Task not found: $task_id${NC}"
+        exit 1
+    fi
+
+    # =========================================================================
+    # Extract frontmatter fields
+    # =========================================================================
+    # T-2731: use the shared extractor (lib/yaml.sh, sourced via lib/paths.sh)
+    # rather than six bespoke greps. The bespoke form matched anywhere in the
+    # FILE, not just the frontmatter — T-100202 has a body line beginning
+    # `name:` at line 248, so `$task_name` became two lines and the emitted
+    # `task_name: "…"` scalar spanned lines, making the episodic unparseable
+    # (OBS-129). It also kept only the first physical line, silently truncating
+    # every multi-line name and reducing every folded description to `>`.
+    # get_yaml_field is frontmatter-scoped and folds continuations.
+    local task_name=$(get_yaml_field "$task_file" "name")
+    local workflow_type=$(get_yaml_field "$task_file" "workflow_type")
+    local created=$(get_yaml_field "$task_file" "created")
+    local last_update=$(get_yaml_field "$task_file" "last_update")
+    local tags=$(get_yaml_field "$task_file" "tags" | tr -d '[]')
+    local description=$(get_yaml_field "$task_file" "description")
+
+    # Parse Updates section for count
+    local updates_section=$(sed -n '/^## Updates/,/^## /p' "$task_file" | head -n -1)
+    local update_count=$(echo "$updates_section" | grep -c "^### " || true)
+    update_count=$(echo "$update_count" | tr -d '[:space:]')
+
+    # =========================================================================
+    # Parse Acceptance Criteria (new template) or Specification Record (old)
+    # =========================================================================
+    local outcomes=""
+    local ac_completed_count=0
+    local ac_total_count=0
+
+    # Try new "Acceptance Criteria" section first
+    local ac_section=$(sed -n '/^## Acceptance Criteria/,/^## /p' "$task_file" 2>/dev/null)
+    if [ -z "$ac_section" ]; then
+        # Fall back to old "Specification Record" section
+        ac_section=$(sed -n '/^## Specification Record/,/^## /p' "$task_file" 2>/dev/null)
+    fi
+
+    if [ -n "$ac_section" ]; then
+        local completed_criteria=$(echo "$ac_section" | grep -E '^\s*-\s*\[x\]' | sed 's/.*\[x\] /- /' | head -10)
+        if [ -n "$completed_criteria" ]; then
+            outcomes="$completed_criteria"
+        fi
+        ac_completed_count=$(echo "$ac_section" | grep -cE '^\s*-\s*\[x\]' || true)
+        ac_total_count=$(echo "$ac_section" | grep -cE '^\s*-\s*\[[ x]\]' || true)
+    fi
+
+    # =========================================================================
+    # Parse Decisions section from task file
+    # =========================================================================
+    # T-3015: delegate to extract_decisions.py. The previous parse read this
+    # block-structured section one line at a time, which produced three defects
+    # from that one assumption: it filtered the comment DELIMITERS but not the
+    # comment INTERIOR (so the template's own `[what was decided]` placeholders
+    # were emitted as real decisions — 77% of episodics in this tree), it cut
+    # multi-line values at the first newline, and it capped at 20 silently.
+    # Reported by 050-email-archive, reproduced independently by 832 at 81%.
+    # The extractor emits the YAML body whole; do not reintroduce a line filter
+    # here — `tests/unit/test_extract_decisions.py` pins all three.
+    local decisions_raw=""
+    local has_decisions=false
+    decisions_raw=$(python3 "$(dirname "${BASH_SOURCE[0]}")/extract_decisions.py" "$task_file" 2>/dev/null)
+    if [ -n "$decisions_raw" ]; then
+        has_decisions=true
+    fi
+
+    # =========================================================================
+    # Git mining
+    # =========================================================================
+    local git_summary=""
+    local git_challenges=""
+    local git_artifacts=""
+    local git_timeline=""
+    local git_timestamps=""
+    local commit_count=0
+    local lines_added=0
+    local lines_removed=0
+    local files_changed_count=0
+
+    # T-3129 (AC3): distinguish "could not measure" from "measured, found none".
+    # The four counters above are INITIALISED to 0. If the mining block below is
+    # skipped, those zeros are not results — they are the absence of a result. The
+    # emitter keys on this flag and writes `null` rather than `0` in that case, so
+    # a reader (human or code) can tell the two apart. Sibling of L-575.
+    local git_mining_ran=false
+
+    # T-3129 (AC1): test REACHABILITY, not the shape of a path. In a linked git
+    # worktree `$PROJECT_ROOT/.git` is a regular FILE holding a `gitdir:` pointer,
+    # so the old `[ -d ... ]` was false and this entire block — every mine_git_*
+    # call plus the --numstat metrics — was skipped, even though the very next
+    # line's `git -C "$PROJECT_ROOT" log` works perfectly from inside a worktree.
+    # `fw worktree create` is the framework's own sanctioned path for parallel
+    # work, so the tasks most likely to record a zero footprint were the ones the
+    # framework itself routed into isolation. `rev-parse --is-inside-work-tree`
+    # asks the question the code below actually depends on: can git answer here?
+    if command -v git >/dev/null 2>&1 && git -C "$PROJECT_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        git_mining_ran=true
+        git_summary=$(mine_git_summary "$task_id")
+        git_challenges=$(mine_git_challenges "$task_id")
+        git_artifacts=$(mine_git_artifacts "$task_id")
+        git_timeline=$(mine_git_timeline "$task_id")
+        git_timestamps=$(mine_git_timestamps "$task_id")
+
+        commit_count=$(git -C "$PROJECT_ROOT" log --all --oneline --grep="$task_id:" 2>/dev/null | wc -l | tr -d ' ')
+        local stat_output
+        stat_output=$(git -C "$PROJECT_ROOT" log --all --grep="$task_id:" --numstat --format="" 2>/dev/null || true)
+        if [ -n "$stat_output" ]; then
+            lines_added=$(echo "$stat_output" | awk '{s+=$1} END {print s+0}')
+            lines_removed=$(echo "$stat_output" | awk '{s+=$2} END {print s+0}')
+            files_changed_count=$(echo "$stat_output" | awk 'NF>=3 {print $3}' | sort -u | wc -l | tr -d ' ')
+        fi
+    fi
+
+    # Use git timestamps if available (more accurate than frontmatter)
+    local git_first_commit=$(echo "$git_timestamps" | cut -d'|' -f1)
+    local git_last_commit=$(echo "$git_timestamps" | cut -d'|' -f2)
+
+    # =========================================================================
+    # Calculate duration
+    # =========================================================================
+    # T-1158: Use portable date helper (GNU→BSD→python3 fallback)
+    source "${FRAMEWORK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}/lib/compat.sh" 2>/dev/null || true
+
+    local created_date=$(echo "$created" | cut -d'T' -f1)
+    local completed_date=$(echo "$last_update" | cut -d'T' -f1)
+    local duration_days=0
+    if [ "$created_date" != "$completed_date" ]; then
+        duration_days=$(( ($(_date_to_epoch "$completed_date") - $(_date_to_epoch "$created_date")) / 86400 )) 2>/dev/null || duration_days=0
+    fi
+
+    local wall_minutes=0
+    if [ -n "$created" ] && [ -n "$last_update" ]; then
+        local start_epoch end_epoch
+        start_epoch=$(_date_to_epoch "$created") || start_epoch=0
+        end_epoch=$(_date_to_epoch "$last_update") || end_epoch=0
+        if [ "$start_epoch" -gt 0 ] && [ "$end_epoch" -gt "$start_epoch" ]; then
+            wall_minutes=$(( (end_epoch - start_epoch) / 60 ))
+        fi
+    fi
+
+    # =========================================================================
+    # Determine enrichment status
+    # =========================================================================
+    local enrichment_status="pending"
+    local status_comment=""
+
+    if [ "$ac_completed_count" -gt 0 ] && [ "$has_decisions" = true ]; then
+        enrichment_status="complete"
+        status_comment="# AC checked + decisions recorded"
+    elif [ "$ac_completed_count" -gt 0 ] && [ "$has_decisions" = false ]; then
+        enrichment_status="auto-complete"
+        status_comment="# Mechanical task — AC checked, no decisions to record"
+    elif [ "$commit_count" -gt 0 ] && [ -n "$git_summary" ]; then
+        enrichment_status="git-derived"
+        status_comment="# Auto-filled from git; AC/decisions not in task file"
+    else
+        enrichment_status="pending"
+        status_comment="# No git commits or AC found — needs manual enrichment"
+    fi
+
+    # =========================================================================
+    # Build summary from git
+    # =========================================================================
+    local summary_text=""
+    if [ -n "$git_summary" ]; then
+        # Join commit messages into a narrative (period + space between each)
+        summary_text=$(echo "$git_summary" | awk '{if(NR>1) printf ". "; printf "%s", $0} END {print ""}')
+    fi
+    # Fall back to description if no git summary
+    if [ -z "$summary_text" ]; then
+        summary_text="${description:-[TODO: No git commits found. Summarize manually.]}"
+    fi
+
+    # =========================================================================
+    # Generate episodic file
+    # =========================================================================
+    local episodic_file="$CONTEXT_DIR/episodic/${task_id}.yaml"
+    local generated_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    # Header changes based on enrichment status
+    local header_status="AUTO-GENERATED"
+    local header_note="Hybrid episodic: git-mined timeline/metrics + task-file decisions/AC."
+    if [ "$enrichment_status" = "pending" ]; then
+        header_status="REQUIRES ENRICHMENT"
+        header_note="Limited data sources. Review and fill missing sections manually."
+    fi
+
+    cat > "$episodic_file" << HEREDOC
+# ============================================================================
+# EPISODIC MEMORY - ${task_id}: ${task_name}
+# ============================================================================
+# STATUS: ${header_status}
+# ${header_note}
+# Generated: $generated_at
+# ============================================================================
+
+task_id: $task_id
+task_name: "$task_name"
+workflow_type: $workflow_type
+enrichment_status: $enrichment_status  $status_comment
+
+# Timeline
+created: $created
+completed: $last_update
+duration_days: $duration_days
+updates_count: $update_count
+HEREDOC
+
+    # Add git timestamps if available
+    if [ -n "$git_first_commit" ]; then
+        echo "first_commit: $git_first_commit" >> "$episodic_file"
+    fi
+    if [ -n "$git_last_commit" ]; then
+        echo "last_commit: $git_last_commit" >> "$episodic_file"
+    fi
+
+    # Summary section (escape backticks and quotes for YAML safety)
+    local safe_summary=$(echo "$summary_text" | sed 's/`//g')
+    cat >> "$episodic_file" << HEREDOC
+
+# Summary (auto-generated from git commit messages)
+summary: |
+  $safe_summary
+
+# Key outcomes
+outcomes:
+HEREDOC
+
+    # Add outcomes from AC. T-1873: single-quoted YAML scalars only — double-
+    # quoted scalars process \X escapes and reject `\`` (backtick), which AC
+    # text routinely contains (markdown inline code). Same L-392 class as the
+    # decisions emitter (T-1871 fix).
+    if [ -n "$outcomes" ]; then
+        echo "$outcomes" | while read -r line; do
+            if [ -n "$line" ]; then
+                local text=$(echo "$line" | sed 's/^- //' | sed "s/'/''/g")
+                echo "  - '$text'" >> "$episodic_file"
+            fi
+        done
+    else
+        echo "  - 'Task completed'" >> "$episodic_file"
+    fi
+
+    # Challenges section — auto-filled from git
+    echo "" >> "$episodic_file"
+    echo "# Challenges (auto-detected from git: commits with fix/revert/bug/error)" >> "$episodic_file"
+    echo "challenges:" >> "$episodic_file"
+    if [ -n "$git_challenges" ]; then
+        # T-1873: single-quoted (same L-392 class as outcomes/decisions).
+        echo "$git_challenges" | while read -r line; do
+            if [ -n "$line" ]; then
+                local escaped=$(echo "$line" | sed "s/'/''/g")
+                echo "  - description: '$escaped'" >> "$episodic_file"
+                echo "    source: git-mined" >> "$episodic_file"
+            fi
+        done
+    else
+        echo "  # No challenges detected in commit messages" >> "$episodic_file"
+    fi
+
+    # Decisions section — from task file
+    echo "" >> "$episodic_file"
+    echo "# Decisions (from task file Decisions section)" >> "$episodic_file"
+    echo "decisions:" >> "$episodic_file"
+    if [ "$has_decisions" = true ]; then
+        # T-3015: already YAML, already escaped. extract_decisions.py emits
+        # single-quoted scalars with ' doubled (T-1871 / L-392 / L-385) — the
+        # same escape strategy the line-by-line version used, kept because
+        # double-quoted scalars break on backticks and backslashes in prose.
+        printf '%s\n' "$decisions_raw" >> "$episodic_file"
+    else
+        echo "  # No decisions recorded (mechanical task or old template)" >> "$episodic_file"
+    fi
+
+    # Artifacts section — auto-filled from git
+    echo "" >> "$episodic_file"
+    echo "# Artifacts (auto-mined from git --name-only)" >> "$episodic_file"
+    echo "artifacts:" >> "$episodic_file"
+    if [ -n "$git_artifacts" ]; then
+        # T-1873: single-quoted (uniform L-392 escape strategy).
+        echo "$git_artifacts" | while read -r line; do
+            if [ -n "$line" ]; then
+                local escaped=$(echo "$line" | sed "s/'/''/g")
+                echo "  - '$escaped'" >> "$episodic_file"
+            fi
+        done
+    else
+        echo "  # No artifacts found in git" >> "$episodic_file"
+    fi
+
+    # Git timeline section
+    echo "" >> "$episodic_file"
+    echo "# Timeline (auto-mined from git log)" >> "$episodic_file"
+    echo "git_timeline:" >> "$episodic_file"
+    if [ -n "$git_timeline" ]; then
+        echo "$git_timeline" | while read -r line; do
+            if [ -n "$line" ]; then
+                # Format: "2026-02-17 14:00:00 +0100 T-116: message"
+                local ts=$(echo "$line" | awk '{print $1"T"$2}')
+                local msg=$(echo "$line" | cut -d' ' -f4-)
+                # T-2729: single-quoted YAML — the only escape is ' -> ''. A
+                # DOUBLE-quoted scalar processes backslash escapes, so a commit
+                # subject containing `\x` is an invalid escape (hard parser error)
+                # and one containing `\n` silently becomes a newline instead of the
+                # two literal characters. Escaping only `"` (the previous code) does
+                # not address either. This was the FIFTH emission site in this
+                # writer: T-1871/T-1873 converted decisions, outcomes, challenges
+                # and artifacts for exactly this reason (L-392) and the sibling
+                # sweep stopped one block short of the git timeline.
+                local escaped_msg=$(echo "$msg" | sed "s/'/''/g")
+                echo "  - time: '$ts'" >> "$episodic_file"
+                echo "    action: '$escaped_msg'" >> "$episodic_file"
+            fi
+        done
+    else
+        echo "  # No git timeline available" >> "$episodic_file"
+    fi
+
+    # Successes — still needs judgment, but provide hint
+    echo "" >> "$episodic_file"
+    echo "# What worked well (requires judgment — [TODO] if enrichment_status is pending)" >> "$episodic_file"
+    echo "successes:" >> "$episodic_file"
+    if [ "$enrichment_status" = "pending" ]; then
+        echo "  - description: \"[TODO: What worked well?]\"" >> "$episodic_file"
+        echo "    why: \"[TODO: Why did it work?]\"" >> "$episodic_file"
+    else
+        if [ "$git_mining_ran" = true ]; then
+            echo "  # Completed successfully in $commit_count commit(s), $wall_minutes min" >> "$episodic_file"
+        else
+            echo "  # Completed successfully in $wall_minutes min (commit count not measured)" >> "$episodic_file"
+        fi
+    fi
+
+    # T-3129 (AC3): a skipped measurement must not emit its initialised value as
+    # a result. `commits: 0` reads as "measured, answer none"; `commits: null`
+    # reads as "not measured". Only the git-derived counters are affected —
+    # wall_clock_minutes comes from the task frontmatter and is always measured.
+    local m_commits="$commit_count"
+    local m_files_changed="$files_changed_count"
+    local m_lines_added="$lines_added"
+    local m_lines_removed="$lines_removed"
+    local git_mining_status=ok
+    if [ "$git_mining_ran" != true ]; then
+        git_mining_status=skipped
+        m_commits=null
+        m_files_changed=null
+        m_lines_added=null
+        m_lines_removed=null
+    fi
+
+    # Static sections
+    cat >> "$episodic_file" << HEREDOC
+
+# Related tasks
+related_tasks:
+  blocked: []
+  absorbed: []
+  spawned: []
+
+# Tags for retrieval
+tags: [$tags]
+
+# Passive metrics (derived automatically — do not edit)
+metrics:
+  # git_mining: ok = the four counters below are measurements.
+  #             skipped = git could not be reached from PROJECT_ROOT; the
+  #             counters are null (absent measurement), NOT zero (T-3129).
+  git_mining: $git_mining_status
+  wall_clock_minutes: $wall_minutes
+  commits: $m_commits
+  files_changed: $m_files_changed
+  lines_added: $m_lines_added
+  lines_removed: $m_lines_removed
+
+# Metadata
+source_file: $task_file
+generated_by: context-agent-hybrid
+HEREDOC
+
+    # =========================================================================
+    # Output
+    # =========================================================================
+    local status_icon="✓"
+    local status_label="Auto-generated"
+    if [ "$enrichment_status" = "pending" ]; then
+        status_icon="⚠"
+        status_label="Needs enrichment"
+    fi
+
+    # T-1631 / G-082 prevention: validate the generated YAML before declaring
+    # success. The prior regex bug at line 125 silently merged decisions and
+    # parser-side tolerance hid the defect for months. Failing loud here means
+    # the next divergence between template and real-data emission gets caught
+    # at write time, not at downstream consumer-read time.
+    if command -v python3 >/dev/null 2>&1; then
+        if ! python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1]))" "$episodic_file" 2>/tmp/episodic-yaml-err.$$; then
+            echo -e "${RED}Episodic YAML validation failed: $episodic_file${NC}" >&2
+            cat /tmp/episodic-yaml-err.$$ >&2
+            rm -f /tmp/episodic-yaml-err.$$
+            echo "" >&2
+            echo "The episodic generator produced invalid YAML. This is a generator bug; do not edit the output by hand." >&2
+            echo "Capture the source task and report on framework:pickup with msg_type=pickup-bug-report." >&2
+            exit 2
+        fi
+        rm -f /tmp/episodic-yaml-err.$$
+    fi
+
+    # T-1719 A1: make the episodic retrievable now rather than at the next hourly
+    # reindex. Deliberately placed AFTER the YAML validation above — indexing a
+    # file that failed to parse would put malformed content into recall and the
+    # validation block right above exists precisely to stop that propagating.
+    # Best-effort: never fails the close (see lib/post-write-index.sh).
+    if [ -f "$FRAMEWORK_ROOT/lib/post-write-index.sh" ]; then
+        # shellcheck source=/dev/null
+        . "$FRAMEWORK_ROOT/lib/post-write-index.sh"
+        fw_post_write_index "$episodic_file"
+    fi
+
+    echo -e "${GREEN}Episodic generated: $episodic_file${NC}"
+    echo ""
+    echo "  Status: $status_icon $enrichment_status ($status_label)"
+    echo "  Task: $task_name"
+    echo "  Duration: $duration_days days ($wall_minutes min)"
+    echo "  Updates: $update_count"
+    if [ "$git_mining_ran" = true ]; then
+        echo "  Commits: $commit_count"
+        echo "  Lines: +$lines_added -$lines_removed across $files_changed_count files"
+    else
+        # T-3129: do not print the initialised zeros as if they were counted.
+        echo "  Commits: not measured (git unreachable from $PROJECT_ROOT)"
+    fi
+    [ -n "$outcomes" ] && echo "  Outcomes: $(echo "$outcomes" | wc -l | tr -d ' ') AC checked"
+    [ -n "$git_challenges" ] && echo "  Challenges: $(echo "$git_challenges" | wc -l | tr -d ' ') detected from git"
+    [ -n "$git_artifacts" ] && echo "  Artifacts: $(echo "$git_artifacts" | wc -l | tr -d ' ') files tracked"
+    [ "$has_decisions" = true ] && echo "  Decisions: recorded from task file"
+    echo ""
+    echo "Source: $task_file"
+}

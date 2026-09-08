@@ -1,0 +1,6 @@
+# Upgrade audit trail (T-617)
+upgrades:
+  - timestamp: 2026-09-08T18:05:14Z
+    from_version: "1.6.474"
+    to_version: "1.6.768"
+    framework_root: "/root/.claude/jobs/66ce9261/tmp/fw-bleeding-edge"

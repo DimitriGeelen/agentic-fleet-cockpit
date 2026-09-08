@@ -1,0 +1,20 @@
+# test_fabric_detail
+
+> Playwright tests for fabric component detail page (T-1041).
+
+**Type:** script | **Subsystem:** tests-playwright | **Location:** `tests/playwright/test_fabric_detail.py`
+
+**Tags:** `playwright`, `test`
+
+## What It Does
+
+## Dependencies (2)
+
+| Component | Relationship | Description |
+|-----------|--------------|-------------|
+| [conftest](/docs/generated/tests-playwright-conftest) | calls | Playwright test fixtures for Watchtower (T-969) |
+| [fabric](/docs/generated/web-blueprints-fabric) | calls | Flask blueprint: Fabric |
+
+---
+*Auto-generated from Component Fabric. Card: `tests-playwright-test_fabric_detail.yaml`*
+*Last verified: 2026-04-07*

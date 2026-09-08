@@ -1,0 +1,151 @@
+<!-- AC fragment for /review/T-XXX — rendered inline and via htmx polling (T-667) -->
+
+{# T-2114 (third sibling of T-2112, T-2113):
+   The wrapping #ac-container DIV (review.html:592-598) declares hx-target="this"
+   for its own 5s polling cycle. htmx INHERITS hx-target to descendants — so the
+   explicit "Reload page" link below, AND every URL emitted by render_markdown_safe
+   inside AC Steps/Expected/If-not text, would otherwise swap their boost-response
+   INTO this small fragment area (cockpit-shell-stays-visible-above-and-bounces-back-
+   in-5s — same bug class as T-2112 /approvals + T-2113 /cockpit).
+
+   Wrapper-reset pattern (chosen over per-anchor triplet because markdown-rendered
+   URLs would otherwise need to be patched at render_markdown_safe level —
+   broader blast radius): a top-level reset div tells all descendants to swap
+   into #content (the page shell). The polling DIV's hx-target="this" resolves
+   on the polling DIV itself, not on this reset wrapper — so the polling cycle
+   continues to target #ac-container correctly. One reset > N per-anchor overrides.
+
+   If a future maintainer thinks this reset is redundant: read T-2112 RCA first.
+   The first hx-boost'ed anchor inside the polling div that loses its override
+   re-introduces the bounce-back. #}
+<div hx-target="#content" hx-swap="innerHTML" hx-push-url="true">
+
+<!-- Progress bar -->
+<div class="ac-progress">
+    Human ACs: {{ checked_count }}/{{ total_count }}
+    <div class="ac-progress-bar">
+        <div class="ac-progress-fill" style="width: {{ (checked_count / total_count * 100) if total_count else 0 }}%;"></div>
+    </div>
+</div>
+
+<!-- AC cards -->
+{% for ac in human_acs %}
+<div class="ac-card {% if ac.checked %}checked{% endif %}">
+    <div class="ac-card-header">
+        {# T-2134 (T-2133 GO slice A): explicit hx-target="this" overrides the
+           outer wrapper's hx-target="#content" (T-2114). Standalone review.html
+           has no #content element; without this override, htmx fires
+           htmx:targetError and ABORTS the POST before any of configRequest /
+           beforeRequest, so CSRF never runs and the click silently no-ops.
+           hx-swap="none" makes the actual target irrelevant for response
+           handling — `this` (the form) always resolves and satisfies htmx's
+           target-must-exist precondition. The two sibling forms below
+           (inception decide, build complete) already declare their own
+           hx-target; this restores that contract for ac-check. #}
+        <form class="ac-check" hx-post="/api/task/{{ task_id }}/toggle-ac"
+              hx-vals='{"line": "{{ ac.line_idx }}"}'
+              hx-target="this"
+              hx-swap="none"
+              hx-on::after-request="htmx.ajax('GET', '/review/{{ task_id }}/acs', {target:'#ac-container', swap:'innerHTML'})">
+            <input type="checkbox" {% if ac.checked %}checked{% endif %}
+                   onchange="this.form.requestSubmit();"
+                   style="width: 24px; height: 24px; margin: 0; cursor: pointer;">
+        </form>
+        {% if ac.confidence == 'review' %}
+        <span class="confidence-badge badge-review">Review</span>
+        {% elif ac.confidence == 'rubber-stamp' %}
+        <span class="confidence-badge badge-rubber-stamp">Rubber-stamp</span>
+        {% endif %}
+        <span {% if ac.checked %}style="text-decoration: line-through; opacity: 0.6;"{% endif %}>{{ ac.text }}</span>
+    </div>
+    {% if not ac.checked and (ac.steps or ac.expected or ac.if_not) %}
+    <div class="ac-detail">
+        {% if ac.steps %}
+        <strong>Steps:</strong>
+        <ol>
+            {% for step in ac.steps %}
+            <li>{{ step | safe }}</li>
+            {% endfor %}
+        </ol>
+        {% endif %}
+        {% if ac.expected %}
+        <strong>Expected:</strong> {{ ac.expected | safe }}
+        {% endif %}
+        {% if ac.if_not %}
+        <div class="if-not"><strong>If not:</strong> {{ ac.if_not | safe }}</div>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+{% endfor %}
+
+{% if not human_acs %}
+<div style="text-align: center; padding: 2rem; color: var(--pico-muted-color);">
+    No Human ACs for this task.
+</div>
+{% endif %}
+
+<!-- Decision / completion section (when all human ACs checked).
+     T-1574: inception tasks need fw inception decide (with rationale), NOT
+     fw task update --status work-completed. The generic Complete button used
+     to fail silently for inceptions because /api/task/<id>/complete returned
+     500 (auto-tick-on-decide ACs unchecked) and htmx ignores non-200. -->
+{% if decision_recorded %}
+{# T-1575: decision already recorded — surface it instead of re-prompting.
+   Without this, the 5-second htmx poll on #ac-container wipes the success
+   message and re-renders the GO/NO-GO/DEFER form, making it look like the
+   decision didn't take. #}
+<div class="decide-section" id="inception-decide-form">
+    {% set _dec_upper = (decision_value or '')|upper %}
+    {% set _dec_color = '#10b981' if _dec_upper == 'GO' else ('#ef4444' if _dec_upper in ('NO-GO', 'NO_GO') else '#6b7280') %}
+    <div style="border-left: 4px solid {{ _dec_color }}; padding: 0.75rem 1rem; background: rgba(0,0,0,0.02); border-radius: 4px;">
+        <strong>Decision recorded:</strong>
+        <span style="color: {{ _dec_color }}; font-weight: 700;">{{ _dec_upper }}</span>
+    </div>
+</div>
+{% elif task_completed %}
+{# T-2081 / T-2082 (L-441 sibling of T-1575): non-inception sibling guard.
+   Without this, the 5-second poll on #ac-container wipes the POST-swap
+   response and re-renders the Complete button for a task that has ALREADY
+   been work-completed. Surface the completion state instead. #}
+<div class="complete-section" id="task-completed-marker">
+    <div style="border-left: 4px solid #10b981; padding: 0.75rem 1rem; background: rgba(0,0,0,0.02); border-radius: 4px;">
+        <strong style="color: #10b981;">✓ Task completed.</strong>
+        <a href="/review/{{ task_id }}" style="margin-left: 0.5rem; font-size: 0.85rem;">Reload page</a> for fresh view.
+    </div>
+</div>
+{% elif all_checked and total_count > 0 %}
+{% if workflow_type == 'inception' %}
+<div class="decide-section" id="inception-decide-form">
+    <h3>Record Decision</h3>
+    {# T-1575: pre-fill rationale from the agent's ## Recommendation block. The
+       human acts on agent's recommendation — they should see and edit it, not
+       re-type from scratch. Mirrors inception_detail.html's `rationale_hint`
+       pattern. #}
+    {% if verdict and verdict != '?' %}
+    <p style="font-size:0.85rem; color:#4b5563; margin:0 0 0.5rem;">
+        Agent recommends <strong style="
+            color: {% if verdict == 'GO' %}#065f46{% elif verdict == 'NO-GO' %}#991b1b{% else %}#9a3412{% endif %};
+        ">{{ verdict }}</strong> — edit the rationale or pick a different decision.
+    </p>
+    {% endif %}
+    <form hx-post="/inception/{{ task_id }}/decide"
+          hx-target="#ac-container" hx-swap="innerHTML">
+        <textarea name="rationale" placeholder="Rationale (required)" required>{{ rec_rationale_text or '' }}</textarea>
+        <div class="decide-buttons">
+            <button type="submit" name="decision" value="go" class="decide-btn decide-btn-go">GO</button>
+            <button type="submit" name="decision" value="no-go" class="decide-btn decide-btn-nogo">NO-GO</button>
+            <button type="submit" name="decision" value="defer" class="decide-btn decide-btn-defer">DEFER</button>
+        </div>
+    </form>
+</div>
+{% else %}
+<div class="complete-section">
+    <form hx-post="/api/task/{{ task_id }}/complete" hx-target="#ac-container" hx-swap="innerHTML">
+        <button type="submit" class="complete-btn">Complete Task</button>
+    </form>
+</div>
+{% endif %}
+{% endif %}
+
+</div>{# T-2114: end of hx-target="#content" reset wrapper #}

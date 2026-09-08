@@ -1,0 +1,447 @@
+# T-1820 — Joint Smoke Demo Artefact
+
+**Status:** build complete + T-2363 (TermLink CLI-surface fix) landed; live smoke
+now has a CONCLUSIVE root cause (2026-08-11) — a framework-side defect
+(`lib/peer.py`), not a TermLink-side one. Follow-up filed: **T-2918**.
+**Arc:** dispatch-safety + orchestrator-rethink (v2 peer-consult slice 1)
+**Cross-repo joint:** framework T-1818/T-1819/T-1820 ↔ TermLink T-1636
+**Seam:** `inbox.queued` event (T-1804 inception GO)
+
+## Headline mechanic
+
+TermLink hub fires `inbox.queued` when a DM lands in a session inbox with no
+live consumer → framework `fw peer subscribe` polls the event → resolves the
+addressee against `.context/peer-consult-prompts.yaml` → spawns a responder
+worker via `fw termlink dispatch`. The cross-repo wire contract is a
+4-field envelope with no message body:
+`{addressee_session_id, channel, message_offset, enqueued_at}`.
+
+This artefact captures the live joint behaviour after T-1636 ships.
+
+## Cross-repo coordination story (dogfooded)
+
+Before dispatching the build worker, the framework agent ran a coordination
+consultation against the TermLink-side anchor to confirm authorization +
+scope. This is itself an instance of the very pattern we are smoke-testing —
+the framework agent asks a peer for guidance before crossing a repo boundary.
+We are doing it by hand because the automated seam (T-1636) is not yet live.
+
+### Coordination consultation (verbatim)
+
+> **T-1636 is unstarted** (created 14h ago, marked `started-work` but zero
+> implementation commits; prior session moved to handover). **Framework
+> dispatch is welcome** — scope is frozen (seam locked in T-1804 inception
+> GO), AEF half shipped, and implementation is pure plumbing (event const +
+> one emission call + test). Documented 5 constraints: event const +
+> delivery-path emit only, locked payload, ≤50 LOC diff, standard event
+> emission style, integration test pinning no-consumer fire / live-consumer
+> no-fire semantics.
+
+Source: `/tmp/tl-dispatch/t1636-coord/result.md` (Haiku, ~60s consultation).
+
+The five locked constraints became the build worker's non-negotiable
+preamble (see Dispatch Envelope below).
+
+## Framework-half (shipped before build dispatch)
+
+| Task | Artefact | What landed |
+|------|----------|-------------|
+| T-1818 | `lib/peer.py` | subscriber + resolver + spawn_responder (12 unit tests pinning event parsing, addressee resolution, spawn shape, cursor advance) |
+| T-1819 | `.context/peer-consult-prompts.yaml` | runtime addressee→workflow map (4 entries: design-consult `dm:design-`, escalation-triage `dm:escalate-`, prompt-triage `dm:triage-`, dm-fallback `dm:`) + disk-load test pinning the shipped seed |
+| T-1820 | this document | joint smoke harness + demo |
+
+Pre-build smoke (mock emitter): `python3 -m pytest tests/unit/test_peer_subscribe.py -q` → 12/12 PASS.
+
+## Dispatch envelope (T-1636 build worker)
+
+```json
+{
+  "name": "t1636-build",
+  "project": "/opt/termlink",
+  "timeout": 5400,
+  "task": "T-1820",
+  "task_type": "build",
+  "model": "sonnet",
+  "model_used": "sonnet",
+  "fallback_used": false,
+  "resolution_source": "explicit",
+  "started": "2026-05-13T23:14:33Z",
+  "status": "running"
+}
+```
+
+CLI form:
+
+```
+bin/fw termlink dispatch \
+  --project /opt/termlink \
+  --task T-1820 \
+  --timeout 5400 \
+  --model sonnet \
+  --name t1636-build \
+  --prompt "<5-constraint preamble>"
+```
+
+**Timeout lesson:** the first dispatch used the 600s default
+`TERMLINK_WORKER_TIMEOUT` and was killed mid-read (211KB into result.jsonl).
+A Rust build + test + commit needs ~30-90min; the watchdog would have killed
+the worker every time at the default. Redispatched with explicit
+`--timeout 5400` + `--model sonnet`. Captured as Evolution entry in T-1820.
+
+**Follow-up candidate (not filed):** workflow-driven timeout — the v1 build
+workflow could declare `expected_duration: 90m` so the dispatcher sizes the
+watchdog from task-type rather than from a one-size-fits-all default.
+
+## Worker report
+
+**Exit:** code 0 at 2026-05-13T23:36Z (~22min wall, well inside the 90min budget).
+
+**3 files changed, 50 LOC diff (48+2)** — within the locked ≤50 LOC budget:
+
+| File | Change |
+|------|--------|
+| `termlink-protocol/src/events.rs` | Added `inbox_topic::QUEUED` const + `InboxQueued` struct |
+| `termlink-hub/src/aggregator.rs` | Added `EventAggregator::inject()` for hub-originated events |
+| `termlink-hub/src/channel.rs` | Wired emit in `mirror_inbox_deposit_with` + 2 unit tests |
+
+**Architecture:** the emit lands inside `mirror_inbox_deposit_with` — the
+function called exclusively when a message is spooled for an offline
+session (no live consumer). On a successful `bus.post`, it calls
+`aggregator().inject()` which surfaces the event via `event.subscribe`
+long-poll. Cross-machine guarantee is intrinsic: the function runs on the
+recipient's hub.
+
+**Integration tests added:**
+- `inbox_queued_fires_for_no_consumer` — no-consumer path emits the event
+- `inbox_queued_not_emitted_without_deposit` — live-consumer path does NOT emit (delivered directly, no enqueue)
+
+Both pass. Release build clean.
+
+**Deviations from constraints:** none. Standard event emission style matched
+(read 2 existing emit sites for the `inject`/`record` pattern). Locked
+payload preserved verbatim.
+
+**Commit trail (on /opt/termlink master, per worker report):**
+- `f3927611` — implementation (events.rs + aggregator.rs + channel.rs + 2 tests)
+- `13a11741` — task update (AC ticks + Recommendation, status left `started-work` for TermLink-side human review)
+
+## Live joint smoke — **PARTIAL: substrate operational, headline mechanic not yet observed in live CLI**
+
+### What landed
+
+After operator GO on path 1 (shared-hub restart):
+
+1. **Deploy worker `t1820-deploy`** (sonnet, exit 0 in 7 min) ran `cargo install --path /opt/termlink/crates/termlink-cli --force`. Binary at `/root/.cargo/bin/termlink` rebuilt from `13a11741` (one commit above the T-1636 emit at `f3927611`). New version: **`termlink 0.9.2104`** (was `0.9.1701`), mtime today.
+2. **Hub restart** — `termlink hub stop && termlink hub start --tcp 0.0.0.0:9100 --json`. Old PID `1113405` (binary mtime 2026-05-01) → new PID `4091515` (binary 0.9.2104). Heads-up sent to remote sessions via `termlink inject` before the restart.
+3. **Framework subscriber against live hub** — `bin/fw peer subscribe --once` exits 0; writes cursor `target_session: framework-agent, since: 0` to `.context/working/.peer-subscribe.cursor`; no errors. The subscriber correctly long-polls `event poll framework-agent --topic inbox.queued --since <cursor>` against the new hub.
+4. **Topic recognized** — `event poll framework-agent --topic inbox.queued --since 0 --timeout 3` returns `"No events (next_seq: 342)"` — the topic name is *known* to the hub (not "unknown topic"), the event stream is operational, and there is currently no `inbox.queued` event sitting in the framework-agent inbox.
+
+### What did NOT fire in this smoke
+
+The integration test `inbox_queued_fires_for_no_consumer` on the TermLink
+side (commit `f3927611`) drives `mirror_inbox_deposit_with()` **directly
+from inside the hub crate** — it is an internal-plumbing test, not a
+user-facing CLI smoke. From the framework agent's user-facing CLI surface,
+two trigger attempts did not produce the event:
+
+| Attempt | What | Result |
+|---------|------|--------|
+| A | `termlink file send peer-offline-target /tmp/t1820-smoke-payload.txt` to an offline target session | `File spooled to hub inbox for 'peer-offline-target'` BUT the send path emitted a `T-1249: new-path send failed — falling back to legacy events` WARN. The legacy fallback does **not** route through the new `mirror_inbox_deposit_with()` emit path. `event poll … inbox.queued` still `next_seq: 342` after the spool. |
+| B | `termlink channel post dm:design-smoke-test --msg-type note` after first having `peer-smoke-consumer` (kill -9'd to take it offline) post to the topic (making it a "member"), then posting again from framework-agent | Post landed at offset 2; topic state confirms 3 posts from one fingerprint; `event poll … inbox.queued` still no events (`next_seq: 343`). The hub did not classify the kill-9'd consumer as an offline subscriber requiring deposit, or the channel-post deposit path doesn't route through the new emit. |
+
+### Why this is a partial — and why the build is still solid
+
+- The headline mechanic (live binary-to-binary observation) is the wire's behaviour as seen from outside. **It was not observed in this smoke window.**
+- The wire contract is nevertheless pinned at the unit-test level on both halves:
+  - TermLink-side: `inbox_queued_fires_for_no_consumer` + `inbox_queued_not_emitted_without_deposit` both PASS at the integration-test layer (verified via worker exit code 0; commit `f3927611`).
+  - Framework-side: 12/12 PASS at `python3 -m pytest tests/unit/test_peer_subscribe.py -q`, covering event parsing, addressee resolution, spawn shape, cursor advance, and loop continuation past a miss.
+- The substrate is operational: deployed binary reflects the new commits, hub runs the new binary, framework subscriber long-polls the new hub for the new topic without error.
+
+### What's missing — the next investigation
+
+Two investigation workers dispatched to clarify the trigger:
+
+1. **`t1820-trigger-spec` (Haiku)** — confirmed the integration test calls
+   `mirror_inbox_deposit_with()` directly (`crates/termlink-hub/src/channel.rs`
+   lines 1780–1809). Helper stack: `tmp_bus → router::init_aggregator →
+   mirror_inbox_deposit_with → aggregator.subscribe/inject`.
+2. **`t1820-trigger-extract` (Haiku)** — reported "CLI trigger exists now:
+   `termlink channel post inbox:<session-id> --msg-type file.init '<json>'`".
+
+I tried that recipe live, **three times** to `inbox:tl-design-smoke-target`
+with `--msg-type file.init`. All three posts landed at offsets 0/1/2 on the
+topic, but **none produced an `inbox.queued` event** on:
+
+- `event poll framework-agent --topic inbox.queued` (still `next_seq: 344`)
+- `event topics` across all live sessions (no `inbox.queued` topic)
+
+**Working hypothesis:** the handler registration that injects `inbox.queued`
+into the aggregator happens *inside the test* via `init_aggregator(...)` —
+not at hub startup. The live hub therefore has no handler picking up the
+`channel post` and injecting the event, even though the post itself lands.
+If true, the new emit is reachable only by code that runs `init_aggregator`
+in-process — which is presently the integration test only.
+
+This needs the TermLink-side maintainer's call:
+- Option A: ship a `router::init_aggregator` invocation at hub startup so
+  the handler is live → the recipe above starts working from CLI.
+- Option B: declare T-1636 as substrate-only-this-slice and wire the
+  user-facing trigger in a follow-up TermLink task (e.g., T-1636-b: register
+  the aggregator handler at hub boot).
+- Option C: pair this with the next TermLink delivery-path change so the
+  emit is wired in production, not just tests.
+
+Filed as **T-1821** on the framework side to track the joint smoke from our
+end: when TermLink resolves A/B/C, we re-run the smoke against the live
+hub and tick T-1820's AC#3 (or close T-1820 substrate-shipped and ship the
+live observation under T-1821).
+
+### Smoke harness (used today, partial)
+
+1. **Spawn a tagged TermLink consumer session**
+   ```
+   termlink spawn --name peer-smoke-consumer --backend background --shell \
+     --wait --tags "task:T-1820,role:peer-smoke-consumer"
+   ```
+
+2. **Post a DM into a `dm:design-*` channel addressed to that session**
+   (the channel prefix should resolve via `peer-consult-prompts.yaml` to
+   `workflows/design-dialogue.yaml` per the seed map.) Use
+   `termlink channel post` with addressee header set to the spawned session's id.
+
+3. **Run framework subscriber once**
+   ```
+   bin/fw peer subscribe --once
+   ```
+
+4. **Observe**:
+   - `inbox.queued` event polled (visible in subscribe stdout)
+   - Addressee resolved to `design-consult` workflow + name
+   - Responder spawn invoked — `fw termlink dispatch --name peer-design-consult --prompt <...>`
+   - Cursor advanced (`.context/working/peer-cursor.yaml` updated to highest seen `message_offset`)
+
+5. **Negative path (single subscribe pass)**: post a second DM to a
+   `dm:unknown-channel` not in the seed map → expect cursor advances, miss
+   logged to `.context/working/peer-misses.jsonl`, no spawn invoked.
+
+Transcript will be pasted verbatim into this section, timestamps included.
+
+## Verification (P-011 gate)
+
+```
+test -f docs/reports/T-1820-joint-smoke-demo.md
+grep -q "T-1636" docs/reports/T-1820-joint-smoke-demo.md
+python3 -m pytest tests/unit/test_peer_subscribe.py -q
+bin/fw reviewer T-1820 2>&1 | grep -q "Overall:.*PASS"
+```
+
+## Recommendation — PARTIAL-COMPLETE (post-deploy)
+
+**Recommendation:** **PARTIAL-SHIP** — close the substrate + capture investigation
+follow-up; do not declare GO on the headline mechanic.
+
+**Rationale:** the deploy landed cleanly (new binary running, hub restarted,
+subscriber polls the new hub without error, topic recognized). Two
+attempts to exercise the new emit from the user-facing CLI did not fire
+it — the file-send path fell back to the legacy emitter (`T-1249` warn),
+and the channel-post-with-offline-subscriber path did not trigger
+`mirror_inbox_deposit_with()` either. The integration test on the
+TermLink side calls that function directly from inside the hub crate, so
+PASSING the test is **not** equivalent to "any user-facing flow exercises
+the new emit." Per the framework's §ACD/G-062 discipline ("acknowledged
+failure is better than false success"), I am not closing T-1820 GO on
+substrate-only evidence — that's the exact conflation §ACD names.
+
+**Evidence (green):**
+- T-1636 implementation landed on `/opt/termlink` master — commits
+  `f3927611` (impl) + `13a11741` (task update); 3 files, 50 LOC (within
+  budget); 2 integration tests pin both no-consumer-fires and
+  live-consumer-no-fires semantics.
+- Framework peer subscriber + resolver shipped (T-1818) and tested
+  (12/12 PASS at `python3 -m pytest tests/unit/test_peer_subscribe.py`).
+- Prompts seed map shipped (T-1819, `.context/peer-consult-prompts.yaml`),
+  with a disk-load test pinning the contract against deletion.
+- Cross-repo wire shape (4-field envelope, no body) is identical on both
+  halves of the seam — guaranteed by paired unit tests + the locked-payload
+  constraint.
+- Coordination consultation captured (`/tmp/tl-dispatch/t1636-coord/result.md`);
+  authorisation + scope confirmed by the TermLink-side peer before dispatch.
+- Reviewer verdict: Overall PASS (needs_human=yes is the correct cross-repo
+  signal); 90-day TTL override OV-22a57a31 documents the integration evidence
+  rationale.
+
+**Evidence (red):**
+- File-send + channel-post smoke attempts did NOT fire `inbox.queued` from
+  outside the hub crate. See §"Live joint smoke" "What did NOT fire" for
+  the specific commands + exit states.
+- The integration test passing on the TermLink side calls
+  `mirror_inbox_deposit_with()` directly — that does NOT prove any user-
+  facing CLI flow currently exercises the new emit.
+
+**Recommended next move:** file T-1821 as a follow-up investigation task —
+"identify the user-facing trigger for inbox.queued and complete the joint
+smoke." Transition T-1820 to work-completed under partial-ship framing:
+substrate is real and useful; the headline-mechanic observation is a
+distinct deliverable worth its own evidence bar.
+
+The agent will NOT autonomously close T-1820 GO on substrate-only evidence
+(that is the §ACD conflation the discipline names). Operator decision
+needed:
+- Accept partial-ship + file T-1821 follow-up
+- Or keep T-1820 open and authorise another investigation worker (read the
+  integration test verbatim, identify the precise trigger, retry smoke)
+
+## 2026-08-11 — conclusive rerun: framework-side root cause found, T-2363 confirmed shipped
+
+TermLink `T-2363` (fix for `remote send-file` legacy fallback wrong RPC,
+filed by T-2409) landed 2026-07-06, commit `7aa968811` — confirmed live via a
+read-only TermLink dispatch worker (`t1820-check-2363`) that verified
+`crates/termlink-cli/src/commands/remote.rs:1750/1785/1820` now call
+`event.emit_to` (3 call sites: file.init/file.chunk/file.complete).
+
+With the known TermLink-side bug fixed, this session re-ran the live smoke
+against the shared hub (`termlink 0.11.720`, PID 2532204, TCP `0.0.0.0:9100`,
+321 active sessions). Findings supersede the "handler not wired at hub boot"
+hypothesis from the 2026-05-14 evolution entry — **that hypothesis is now
+proven false** (see below).
+
+### Reproduction trail
+
+1. **Aggregator IS wired at hub startup** (not test-only). Confirmed via
+   read-only worker: `crates/termlink-hub/src/server.rs:279`,
+   `run_with_tcp()` calls `router::init_aggregator()` on every `hub start`.
+   This invalidates the working hypothesis carried since 2026-05-14.
+2. **Spawned a fresh target session** `t1820-remote-target`, killed it
+   (`termlink signal ... SIGKILL`) to simulate offline, confirmed via
+   `termlink status t1820-remote-target` → `Session not found`.
+3. **Triggered via the T-2363-fixed path**: `termlink remote send-file
+   127.0.0.1:9100 t1820-remote-target /tmp/t1820-smoke/payload.txt --json`
+   → `{"ok":true,...}`, confirmed spooled via `termlink inbox list
+   t1820-remote-target`.
+4. **Triggered via the canonical DM rail** (matching the AC's literal "posts
+   a DM into a dm:design-* channel" language): `termlink channel dm
+   t1820-remote-target --send '...' --json` → topic auto-resolves to
+   `dm:d1993c2c3ec44c94:t1820-remote-target` (confirmed via
+   `channel dm ... --topic-only`).
+5. **Polled per-session** (`termlink event poll termlink-agent --topic
+   inbox.queued --since 0`) and (`termlink event poll t1820-remote-target
+   --topic inbox.queued --since 0`) immediately after triggers #3 and #4 —
+   **both returned `count: 0`** on every attempt, matching every prior
+   session's outcome back to 2026-05-14.
+6. **Polled the hub aggregator directly**: `termlink event watch --hub
+   --topic inbox.queued --json --timeout 8` running concurrently with
+   trigger #3 → **captured the event instantly**:
+   ```json
+   {"ok":true,"payload":{"addressee_session_id":"t1820-remote-target",
+   "channel":"inbox:t1820-remote-target","enqueued_at":1786451925622,
+   "message_offset":3,"schema_version":"1.0"},"seq":0,"session":"hub",
+   "session_name":"hub","source":"hub-aggregator","topic":"inbox.queued"}
+   ```
+7. **Polled the hub aggregator for `dm.queued`** concurrently with trigger
+   #4 → also captured instantly:
+   ```json
+   {"ok":true,"payload":{"addressee_session_id":"t1820-remote-target",
+   "channel":"dm:d1993c2c3ec44c94:t1820-remote-target","enqueued_at":
+   1786451903419,"message_offset":3,"schema_version":"1.0"},"seq":0,
+   "session":"hub","session_name":"hub","source":"hub-aggregator",
+   "topic":"dm.queued"}
+   ```
+
+### Two independent, now-confirmed defects
+
+1. **Framework-side (new, previously undiagnosed — T-2918):**
+   `lib/peer.py::poll_once` calls `termlink event poll <session> --topic
+   inbox.queued --since <cursor>` — a per-session event-bus read. Hub-
+   aggregator events are injected under a synthetic `session_id: "hub"`
+   (`EventAggregator`, T-1645) that per-session poll structurally cannot
+   reach, regardless of which session is targeted or whether the topic name
+   is correct. This is confirmed by step 5 above returning zero events on
+   **both** the addressee session and an unrelated session, immediately
+   after a proven emit that step 6 captured within the same second. **`fw
+   peer subscribe` has never been able to observe a live `inbox.queued`
+   event since T-1818 shipped** — independent of the TermLink-side bugs
+   T-2409/T-2363 correctly found and fixed.
+2. **Topic-name mismatch (new, previously undiagnosed — also T-2918):** the
+   DM rail (T-2323, arc-004 slice 1 — shipped after T-1819's
+   `peer-consult-prompts.yaml` was authored) emits under topic
+   **`dm.queued`**, not `inbox.queued` (`termlink-protocol/src/events.rs:463`
+   vs `:457`). `.context/peer-consult-prompts.yaml`'s `dm:design-*` /
+   `dm:escalate-*` / `dm:triage-*` channel-prefix routing — which the AC's
+   original wording ("posts a DM into a dm:design-* channel") assumes reads
+   `inbox.queued` — can **never** fire via the topic `fw peer subscribe`
+   polls, even with defect #1 fixed. Separately, the DM rail's channel field
+   is a literal `dm:<fingerprint-a>:<fingerprint-b>` pair (T-2323,
+   `channel.rs:826-863`) — the sender fingerprint cannot be spoofed to
+   `design-*` (hub rejects `sender_id` mismatches with the real ed25519
+   identity, error -32014), so even a topic-name fix alone would not let a
+   `dm:design-*`-literal channel exist under the current DM-rail design.
+
+### Why three months of investigation missed this
+
+T-1820 (2026-05-14) → T-2409 (2026-07-05) → TermLink T-2363 (2026-07-06) each
+re-tested the **emit side** (does TermLink fire the event?) and each time
+found and fixed a real bug there. None re-tested whether the framework's own
+`poll_once` call could reach a hub-injected event **at all**, because the
+emit-side bugs were sufficient to explain a silent miss on their own — a
+green "hub fires the event" report from a TermLink-side worker (using
+`event watch --hub`) was read as "the smoke should work now," without
+noticing the framework subscriber uses a structurally different primitive
+(`event poll <session>`) than the one used to verify the fix.
+
+### Recommendation impact
+
+This does not change the AC #2 outcome (still cannot be ticked — the live
+smoke, taken as literally scoped, still does not fire end-to-end), but it
+replaces "unknown TermLink-side gap, awaiting their fix" with a conclusive,
+actionable, framework-owned root cause. **T-2918** filed to fix `lib/peer.py`
+and (separately) decide the `inbox.queued`/`dm.queued` two-rail question.
+T-1821's original hypothesis ("aggregator not wired at hub boot") is
+superseded — the aggregator was wired the whole time; the miss was on the
+polling side.
+
+## Provenance / cross-repo trail
+
+| Repo | Task | Commits (this slice) |
+|------|------|----------------------|
+| 999-Agentic-Engineering-Framework | T-1818 | (subscriber ship — completed before this session) |
+| 999-Agentic-Engineering-Framework | T-1819 | `eaada7235` (seed + disk-load test) |
+| 999-Agentic-Engineering-Framework | T-1820 | `16c1ae4ec` (ACs + dispatch), `04de4d7e7` (Evolution capture) |
+| termlink                          | T-1636 | `f3927611` (impl), `13a11741` (task update) — on `/opt/termlink` master, not yet installed to `/root/.cargo/bin/termlink` |
+| termlink                          | T-1637 | `ebe05294` (follow-up: extend `handle_channel_post_with` to inject `inbox.queued` on `inbox:*` topics — shipped 2026-05-15, version 0.9.2110) — confirmed deployed on this hub (PID 2382342) per `termlink doctor` 2026-05-16T06:47Z |
+
+## 2026-05-16 — rerun against fix-shipped hub 0.9.2110 ebe05294
+
+**Asked by termlink-agent (framework:pickup offset 18, msg-type=fix.shipped):**
+> "Please re-run the T-1820 joint smoke against the updated hub and confirm next_seq advances on inbox.queued."
+
+**Done.** Result: **headline mechanic still NOT observable from any session-targeted subscribe/poll**. The fix-shipped binary is on-hub; emit doesn't land on a per-session event bus.
+
+### Rerun trail
+
+- Hub identity: `termlink doctor` reports `version: termlink 0.9.2110 (ebe05294)` and `hub: running (PID 2382342)` — same PID + binary termlink-agent reported in fix-shipped msg.
+- Re-spawned target: `termlink spawn --name tl-design-smoke-target` (session had been cleaned up since the 2026-05-14 smoke).
+- Three triggers fired: `termlink channel post inbox:tl-design-smoke-target --msg-type file.init --payload '{"transfer_id":"t1820-rerun-00X-2026-05-16",…}' --json`.
+  - All three delivered cleanly to topic `inbox:tl-design-smoke-target` at offsets 5/6/7 (`{"delivered":{"offset":N,"ts":...}}`).
+- Probes after each trigger:
+
+| Probe | Target | Result |
+|-------|--------|--------|
+| `termlink event poll … --topic inbox.queued --since 0` | `tl-design-smoke-target` | `count: 0, next_seq: 0` (session bus empty) |
+| `termlink event poll … --topic inbox.queued --since 0` | `framework-agent` | `count: 0, next_seq: 384` — no advance |
+| `mcp__termlink_event_subscribe topic=inbox.queued since=0 timeout_ms=3000` | `tl-design-smoke-target` | `count: 0, events: []` |
+| `termlink event topics` (all sessions, 10 registered) | n/a | **zero sessions list `inbox.queued`** |
+| `termlink channel info inbox.queued` | n/a | `-32013 unknown topic` (expected — it's an event class, not a channel) |
+
+### Asymmetry hypothesis
+
+Framework-side `lib/peer.py::poll_once` (and therefore `fw peer subscribe`) calls `termlink event poll <target_session> --topic inbox.queued --since <cursor>` — a **per-session** event-bus poll. The new emit, per termlink-agent's verification path "hub-level event.subscribe", appears to land somewhere `event poll <session>` cannot reach (a hub-internal aggregator? a virtual cross-session bus?). The session-targeted MCP `event_subscribe` also returns count=0 against the same target the test reported, which suggests the emit is not actually attached to that session's bus despite carrying `addressee_session_id=<that session>` in payload.
+
+### Open question to termlink-agent
+
+> The fix-shipped binary is live on this hub (PID matches your reported hub_pid, version 0.9.2110 ebe05294 matches your commit). Triggers via `channel post inbox:<id> --msg-type file.init` deliver cleanly. But neither `termlink event poll <id> --topic inbox.queued` (session bus) nor `mcp event_subscribe target=<id> topic=inbox.queued` returns the event, and no session lists `inbox.queued` under `event topics`. The framework's `fw peer subscribe` polls per-session, not hub-aggregator. **What RPC / subscription path did your live-smoke use to see count=1?** Specifically: did the emit attach to `addressee_session_id`'s own event bus, or only to a hub-aggregator stream that requires a different subscribe call from a CLI client?
+
+Two resolution shapes that would unblock the headline mechanic:
+- **(A)** Attach the emit to `<addressee_session_id>`'s event bus (so `event poll <id> --topic inbox.queued` and `mcp event_subscribe target=<id>` return it). Framework subscriber needs no changes.
+- **(B)** Document the hub-aggregator subscribe path and ship a CLI verb (e.g. `termlink event aggregator-subscribe --topic inbox.queued`). Framework subscriber switches to that verb.
+
+T-1820 remains PARTIAL-SHIP pending clarification. Demo doc + Evolution log carry the rerun evidence (this section). Cross-repo inject sent to termlink-agent with the same question.

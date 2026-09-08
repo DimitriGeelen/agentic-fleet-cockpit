@@ -1,0 +1,916 @@
+"""Inception blueprint — inception task tracking and assumption registry."""
+
+import logging
+import re as re_mod
+
+import markdown2
+import yaml
+from flask import Blueprint, abort, redirect, request, url_for
+from markupsafe import Markup
+
+from web.shared import (
+    FRAMEWORK_ROOT,
+    PROJECT_ROOT,
+    _auto_link_files,
+    get_all_task_metadata,
+    parse_frontmatter,
+    render_page,
+    task_id_sort_key,
+)
+
+logger = logging.getLogger(__name__)
+from web.subprocess_utils import run_fw_command
+
+
+def _md(text):
+    """Convert markdown text to safe HTML."""
+    if not text:
+        return ""
+    # Ensure blank line before lists so markdown parser recognizes them
+    text = re_mod.sub(r"([^\n])\n(- )", r"\1\n\n\2", text)
+    text = re_mod.sub(r"([^\n])\n(\d+\. )", r"\1\n\n\2", text)
+    html = markdown2.markdown(text, extras=["fenced-code-blocks", "tables"])
+    # T-1723: artefact paths → /file/ anchors (existence-gated, idempotent).
+    html = _auto_link_files(html)
+    return Markup(html)
+
+
+# T-1575: rationale/stance extraction consolidated into web.shared.extract_recommendation.
+# These shims accept the section body (already extracted by _extract_section) — the canonical
+# helper expects a full task body, so we wrap with a synthetic `## Recommendation` header.
+# Fallback (return body when no `**Rationale:**` marker) preserves T-1390 free-form behavior.
+
+def _extract_rationale_from_recommendation(rec_body):
+    """T-1390 / T-1575: rationale body of a `## Recommendation` block. Falls
+    back to the **-stripped raw body when no structured `**Rationale:**` marker
+    exists (preserves free-form recommendation handling)."""
+    if not rec_body:
+        return ""
+    from web.shared import extract_recommendation
+    rec = extract_recommendation(f"## Recommendation\n{rec_body}\n\n## End\n")
+    if rec["rationale"]:
+        return rec["rationale"]
+    return re_mod.sub(r"\*\*([^*]+)\*\*", r"\1", rec_body).strip()
+
+
+def _extract_recommendation_stance(rec_body):
+    """T-1391 / T-1575: stance ('go'/'no-go'/'defer'/None) from `**Recommendation:**`
+    header line. None when section is unstructured/empty."""
+    if not rec_body:
+        return None
+    from web.shared import extract_recommendation
+    rec = extract_recommendation(f"## Recommendation\n{rec_body}\n\n## End\n")
+    if rec["verdict"] == "?":
+        return None
+    return rec["verdict"].lower()
+
+bp = Blueprint("inception", __name__)
+
+
+import time as _time_mod
+import copy as _copy_mod
+
+# Cache for inception task bodies (frontmatter from shared cache, bodies read on demand)
+_inception_cache = {"data": None, "all_count": 0, "ts": 0}
+_INCEPTION_CACHE_TTL = 30
+
+
+def _load_all_tasks():
+    """Load all tasks with inception tasks enriched with body text.
+
+    Uses the shared task metadata cache for frontmatter (avoids reading 1200+ files).
+    Only reads body text for inception tasks (~200 files instead of 1200+).
+    """
+    import copy
+    now = _time_mod.monotonic()
+    all_meta = get_all_task_metadata()
+
+    # Check if cache is still valid (same task count + within TTL)
+    if (_inception_cache["data"] is not None
+            and len(all_meta) == _inception_cache["all_count"]
+            and (now - _inception_cache["ts"]) < _INCEPTION_CACHE_TTL):
+        return _inception_cache["data"]
+
+    tasks = []
+    for fm in all_meta:
+        t = copy.copy(fm)
+        if fm.get("workflow_type") == "inception":
+            # Read body text only for inception tasks
+            task_id = fm.get("id", "")
+            location = fm.get("_location", "active")
+            task_dir = PROJECT_ROOT / ".tasks" / location
+            body = ""
+            if task_dir.exists():
+                for f in task_dir.glob(f"{task_id}-*.md"):
+                    _, body = parse_frontmatter(f.read_text())
+                    break
+            t["_body"] = body
+        else:
+            t["_body"] = ""
+        tasks.append(t)
+
+    _inception_cache["data"] = tasks
+    _inception_cache["all_count"] = len(all_meta)
+    _inception_cache["ts"] = now
+    return tasks
+
+
+def _extract_decision(body):
+    """Extract decision state from task body."""
+    for line in body.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("**Decision**:") or stripped.startswith("**Decision:**"):
+            value = stripped.split(":", 1)[1].strip().strip("*").strip()
+            if value and value != "<!--":
+                return value
+    return "pending"
+
+
+def _is_decided_unclosed(task_data, task_body):
+    """T-3180: does this inception need exactly one thing — the operator closing it?
+
+    Imports the SAME predicate `/approvals` uses (`lib/decided_unclosed.py`) rather than
+    re-deriving it here. A fourth reimplementation of "is this decided" is precisely what
+    produced the bug: `/approvals` told the operator the decision was recorded while this
+    page offered only to re-decide it, because the two surfaces answered the question
+    independently. Sharing the predicate makes them agree by construction.
+
+    Fails CLOSED (returns False) on any error — a missing helper must not add a close
+    button to a page that should not have one, and must never take the page down.
+    """
+    import sys
+
+    # T-2645 / OBS-097: lib/ is FRAMEWORK-owned, so it resolves from FRAMEWORK_ROOT.
+    # PROJECT_ROOT is the consumer's project in a split-root install and has no lib/.
+    lib_dir = str(FRAMEWORK_ROOT / "lib")
+    if lib_dir not in sys.path:
+        sys.path.insert(0, lib_dir)
+    try:
+        import decided_unclosed
+
+        return decided_unclosed.is_decided_unclosed(task_data or {}, task_body or "")
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("decided-unclosed predicate unavailable: %s", e)
+        return False
+
+
+def _extract_section(body, section_name):
+    """Extract content of a markdown section (## heading) from body."""
+    lines = body.split("\n")
+    capture = False
+    result = []
+    for line in lines:
+        if line.startswith(f"## {section_name}"):
+            capture = True
+            continue
+        if capture and line.startswith("## "):
+            break
+        if capture:
+            result.append(line)
+    text = "\n".join(result).strip()
+    # Strip HTML comments
+    text = re_mod.sub(r"<!--.*?-->", "", text, flags=re_mod.DOTALL).strip()
+    return text
+
+
+def _extract_all_sections(body):
+    """Extract all ## sections from markdown body as {heading: content} dict.
+
+    Returns an OrderedDict preserving the order sections appear in the file.
+    HTML comments are stripped from content. (T-1177, G-036)
+    """
+    from collections import OrderedDict
+    sections = OrderedDict()
+    lines = body.split("\n")
+    current_heading = None
+    current_lines = []
+
+    for line in lines:
+        if line.startswith("## "):
+            # Save previous section
+            if current_heading is not None:
+                text = "\n".join(current_lines).strip()
+                text = re_mod.sub(r"<!--.*?-->", "", text, flags=re_mod.DOTALL).strip()
+                sections[current_heading] = text
+            current_heading = line[3:].strip()
+            current_lines = []
+        elif current_heading is not None:
+            current_lines.append(line)
+
+    # Save last section
+    if current_heading is not None:
+        text = "\n".join(current_lines).strip()
+        text = re_mod.sub(r"<!--.*?-->", "", text, flags=re_mod.DOTALL).strip()
+        sections[current_heading] = text
+
+    return sections
+
+
+def _load_assumptions():
+    """Load assumptions from the project register."""
+    af = PROJECT_ROOT / ".context" / "project" / "assumptions.yaml"
+    if not af.exists():
+        return []
+    try:
+        with open(af) as f:
+            data = yaml.safe_load(f)
+    except Exception as e:
+        logger.warning("Failed to parse %s: %s", af, e)
+        return []
+    if not data:
+        return []
+    return data.get("assumptions", [])
+
+
+# --- Reports index cache (T-1245) ---
+_reports_cache = {"index": None, "count": 0, "ts": 0}
+_REPORTS_CACHE_TTL = 60
+
+
+def _get_reports_index():
+    """Build {task_id: 'docs/reports/filename.md'} index from reports directory."""
+    now = _time_mod.monotonic()
+    reports_dir = PROJECT_ROOT / "docs" / "reports"
+    if not reports_dir.exists():
+        return {}
+    current_count = len(list(reports_dir.glob("*.md")))
+    if (_reports_cache["index"] is not None
+            and current_count == _reports_cache["count"]
+            and (now - _reports_cache["ts"]) < _REPORTS_CACHE_TTL):
+        return _reports_cache["index"]
+
+    index = {}
+    for rf in reports_dir.iterdir():
+        if rf.suffix != ".md":
+            continue
+        m = re_mod.search(r"(T-\d+)", rf.name, re_mod.IGNORECASE)
+        if m:
+            tid = m.group(1).upper()
+            index[tid] = f"docs/reports/{rf.name}"
+    _reports_cache["index"] = index
+    _reports_cache["count"] = current_count
+    _reports_cache["ts"] = now
+    return index
+
+
+@bp.route("/inception")
+def inception_list():
+    all_tasks = _load_all_tasks()
+    inception_tasks = [t for t in all_tasks if t.get("workflow_type") == "inception"]
+
+    assumptions = _load_assumptions()
+    _reports_index = _get_reports_index()
+
+    # Enrich inception tasks with decision state, assumption counts, and recommendation (T-959)
+    for t in inception_tasks:
+        body = t.get("_body", "")
+        t["_decision"] = _extract_decision(body)
+        task_id = t.get("id", "")
+        linked = [a for a in assumptions if a.get("linked_task") == task_id]
+        t["_assumption_total"] = len(linked)
+        t["_assumption_validated"] = len([a for a in linked if a.get("status") == "validated"])
+        t["_assumption_invalidated"] = len([a for a in linked if a.get("status") == "invalidated"])
+        t["_assumption_untested"] = len([a for a in linked if a.get("status") == "untested"])
+
+        # T-959: Extract recommendation summary for batch review
+        rec_section = _extract_section(body, "Recommendation")
+        if rec_section:
+            # Get first 200 chars of recommendation for inline display
+            rec_lines = [l for l in rec_section.split("\n") if l.strip() and not l.startswith("#")]
+            t["_recommendation"] = " ".join(rec_lines)[:300] if rec_lines else ""
+            # Extract recommendation type (GO/NO-GO/DEFER)
+            rec_type = ""
+            for line in rec_lines[:3]:
+                if re_mod.search(r"\bGO\b", line) and not re_mod.search(r"\bNO-GO\b", line):
+                    rec_type = "GO"
+                    break
+                elif re_mod.search(r"\bNO-GO\b", line):
+                    rec_type = "NO-GO"
+                    break
+                elif re_mod.search(r"\bDEFER\b", line):
+                    rec_type = "DEFER"
+                    break
+            t["_rec_type"] = rec_type
+        else:
+            t["_recommendation"] = ""
+            t["_rec_type"] = ""
+
+        # T-959: Check for research artifact (T-1245: cached index)
+        t["_has_artifact"] = False
+        t["_artifact_path"] = ""
+        if task_id and task_id in _reports_index:
+            t["_has_artifact"] = True
+            t["_artifact_path"] = _reports_index[task_id]
+
+    # Filter
+    decision_filter = request.args.get("decision", "").strip().lower()
+    if decision_filter:
+        inception_tasks = [
+            t for t in inception_tasks
+            if t["_decision"].lower() == decision_filter
+        ]
+
+    location_filter = request.args.get("location", "").strip()
+    if location_filter:
+        inception_tasks = [t for t in inception_tasks if t["_location"] == location_filter]
+
+    # Sort: active first, then by ID
+    inception_tasks.sort(key=lambda t: (0 if t["_location"] == "active" else 1, task_id_sort_key(t)))
+
+    # Summary counts
+    all_inception = [t for t in all_tasks if t.get("workflow_type") == "inception"]
+    summary = {
+        "total": len(all_inception),
+        "active": len([t for t in all_inception if t["_location"] == "active"]),
+        "completed": len([t for t in all_inception if t["_location"] == "completed"]),
+        "pending": len([t for t in all_inception if _extract_decision(t.get("_body", "")).lower() == "pending"]),
+        "go": len([t for t in all_inception if _extract_decision(t.get("_body", "")).lower() == "go"]),
+        "no_go": len([t for t in all_inception if _extract_decision(t.get("_body", "")).lower() in ("no-go", "no_go")]),
+    }
+
+    return render_page(
+        "inception.html",
+        page_title="Inception",
+        inception_tasks=inception_tasks,
+        summary=summary,
+        decision_filter=decision_filter,
+        location_filter=location_filter,
+        assumptions_total=len(assumptions),
+    )
+
+
+@bp.route("/inception/<task_id>")
+def inception_detail(task_id):
+    if not re_mod.match(r"^T-\d{3,}$", task_id):
+        abort(404)
+
+    task_data = None
+    task_body = ""
+    for location in ["active", "completed"]:
+        task_dir = PROJECT_ROOT / ".tasks" / location
+        if not task_dir.exists():
+            continue
+        for f in task_dir.glob(f"{task_id}-*.md"):
+            task_data, task_body = parse_frontmatter(f.read_text())
+            if task_data:
+                task_data["_location"] = location
+            else:
+                task_data = None
+            break
+
+    if not task_data or task_data.get("workflow_type") != "inception":
+        abort(404)
+
+    # Extract sections dynamically (T-1177, G-036)
+    all_raw_sections = _extract_all_sections(task_body)
+
+    # Known sections with template-specific rendering
+    KNOWN_SECTIONS = {
+        "Problem Statement", "Assumptions", "Exploration Plan",
+        "Technical Constraints", "Scope Fence", "Go/No-Go Criteria",
+        "Recommendation", "Structural Upgrade", "Decision", "Updates",
+        "Acceptance Criteria", "Verification", "Decisions", "Context",
+        "RCA",
+    }
+    # T-1585: also exclude versioned Reviewer Verdict headings (e.g.
+    # "Reviewer Verdict (v1.4)") from extra_sections — they're rendered
+    # structurally below via extract_reviewer_verdict, not as generic cards.
+
+    # Build legacy sections dict for backward compatibility with template
+    sections = {
+        "problem": _md(all_raw_sections.get("Problem Statement", "")),
+        "assumptions_text": _md(all_raw_sections.get("Assumptions", "")),
+        "exploration": _md(all_raw_sections.get("Exploration Plan", "")),
+        "constraints": _md(all_raw_sections.get("Technical Constraints", "")),
+        "scope": _md(all_raw_sections.get("Scope Fence", "")),
+        "criteria": _md(all_raw_sections.get("Go/No-Go Criteria", "")),
+        "recommendation": _md(all_raw_sections.get("Recommendation", "")),
+        "structural_upgrade": _md(all_raw_sections.get("Structural Upgrade", "")),
+        "decision": _md(all_raw_sections.get("Decision", "")),
+        "updates": _md(all_raw_sections.get("Updates", "")),
+        # T-2077 (T-2066 GO): 5 sections previously extracted but dropped on
+        # the floor. /inception/<id> now mirrors task_detail.html section set
+        # so Context/RCA/AC/Verification/Decisions surface when present.
+        "context": _md(all_raw_sections.get("Context", "")),
+        "acceptance_criteria": _md(all_raw_sections.get("Acceptance Criteria", "")),
+        "verification": _md(all_raw_sections.get("Verification", "")),
+        "decisions": _md(all_raw_sections.get("Decisions", "")),
+        "rca": _md(all_raw_sections.get("RCA", "")),
+    }
+
+    # Extra sections not in the known set — rendered generically (G-036 fix)
+    # T-1585: also skip "Reviewer Verdict (vX.Y)" — surfaced structurally below.
+    extra_sections = []
+    for heading, content in all_raw_sections.items():
+        if heading in KNOWN_SECTIONS:
+            continue
+        if heading.startswith("Reviewer Verdict"):
+            continue
+        # T-100188: claims-validator verdict (T-100187) — surfaced structurally
+        # beside the recommendation, not as a generic card.
+        if heading.startswith("Recommendation Verdict"):
+            continue
+        if content:
+            extra_sections.append({"heading": heading, "content": _md(content)})
+
+    # T-679: Pre-populate rationale from ## Recommendation section
+    # T-1390 (F4 fix): extract only the Rationale body from structured
+    # recommendations (Recommendation/Rationale/Evidence format). Without
+    # this, pre-fill contained the whole block including "Recommendation: GO"
+    # prefix and Evidence bullets — the stored decision then embedded the
+    # self-referential prefix + all evidence bullets (see T-1388 F4).
+    # T-1246 (G-046 fix): when the task file lacks a Recommendation section,
+    # fall back to docs/reports/T-{task_id}-inception.md (CTL-027 artifact).
+    # Tries canonical name first, then T-{id}-*-inception.md for older
+    # descriptive-slug artifacts. Rewards thorough research artifacts instead
+    # of punishing them with an empty pre-fill.
+    rec_raw = _extract_section(task_body, "Recommendation") or ""
+    if not rec_raw:
+        reports_dir = PROJECT_ROOT / "docs" / "reports"
+        candidates = [reports_dir / f"{task_id}-inception.md"]
+        candidates.extend(sorted(reports_dir.glob(f"{task_id}-*-inception.md")))
+        for artifact_path in candidates:
+            if artifact_path.exists():
+                try:
+                    artifact_body = artifact_path.read_text()
+                    rec_raw = _extract_section(artifact_body, "Recommendation") or ""
+                    if rec_raw:
+                        break
+                except Exception as e:
+                    logger.warning("Failed to read %s: %s", artifact_path, e)
+    rationale_hint = _extract_rationale_from_recommendation(rec_raw)
+
+    decision_state = _extract_decision(task_body)
+
+    # T-3180: a decided inception that is still in active/ needs closing, and until now
+    # that action was on no button anywhere. /review/<id> 302s here, so both routes
+    # converged on a page whose only form re-decides. The gap was introduced by T-3175's
+    # own copy ("Close it from /inception/T-XXXX") pointing at a page that could not.
+    decided_unclosed = _is_decided_unclosed(task_data, task_body)
+
+    # T-1391 (F3 fix): compute rec_stance + decision_matches_recommendation so
+    # the template can collapse the duplicate Recommendation card when the
+    # human adopted the recommendation, or label both cards when overridden.
+    rec_stance = _extract_recommendation_stance(rec_raw)
+    _dec_norm = (decision_state or "").lower().replace("_", "-")
+    decision_matches_recommendation = (
+        rec_stance is not None
+        and _dec_norm not in ("", "pending")
+        and rec_stance == _dec_norm
+    )
+
+    # Load linked assumptions
+    assumptions = _load_assumptions()
+    linked_assumptions = [a for a in assumptions if a.get("linked_task") == task_id]
+
+    # Episodic memory
+    episodic = None
+    episodic_file = PROJECT_ROOT / ".context" / "episodic" / f"{task_id}.yaml"
+    if episodic_file.exists():
+        try:
+            with open(episodic_file) as f:
+                episodic = yaml.safe_load(f)
+        except Exception as e:
+            logger.warning("Failed to parse %s: %s", episodic_file, e)
+
+    # T-1585: surface reviewer's mechanical verdict structurally — cross-surface
+    # parity with /approvals (T-1569), /review (T-1583), /tasks (T-1584).
+    from web.shared import extract_recommendation_claims_verdict, extract_reviewer_verdict
+    reviewer = extract_reviewer_verdict(task_body)
+
+    # T-100188: claims-validator verdict (T-100187) — mechanical check of the
+    # evidence claims inside ## Recommendation, rendered beside it.
+    claims_verdict = extract_recommendation_claims_verdict(task_body)
+
+    return render_page(
+        "inception_detail.html",
+        page_title=f"Inception {task_id}",
+        task=task_data,
+        sections=sections,
+        extra_sections=extra_sections,
+        decision_state=decision_state,
+        decided_unclosed=decided_unclosed,
+        linked_assumptions=linked_assumptions,
+        episodic=episodic,
+        task_id=task_id,
+        rationale_hint=rationale_hint,
+        rec_stance=rec_stance,
+        decision_matches_recommendation=decision_matches_recommendation,
+        reviewer=reviewer,
+        claims_verdict=claims_verdict,
+    )
+
+
+@bp.route("/inception/<task_id>/add-assumption", methods=["POST"])
+def add_assumption(task_id):
+    if not re_mod.match(r"^T-\d{3,}$", task_id):
+        abort(404)
+    statement = request.form.get("statement", "").strip()
+    if not statement:
+        abort(400)
+    run_fw_command(["assumption", "add", statement, "--task", task_id], timeout=10)
+    return redirect(url_for("inception.inception_detail", task_id=task_id))
+
+
+@bp.route("/assumptions/<assumption_id>/resolve", methods=["POST"])
+def resolve_assumption(assumption_id):
+    if not re_mod.match(r"^A-\d{3}$", assumption_id):
+        abort(404)
+    action = request.form.get("action", "").strip().lower()
+    evidence = request.form.get("evidence", "").strip()
+    if action not in ("validate", "invalidate") or not evidence:
+        abort(400)
+    run_fw_command(["assumption", action, assumption_id, "--evidence", evidence], timeout=10)
+    # Redirect back to referrer or assumptions list
+    referrer = request.form.get("redirect", "")
+    if referrer:
+        return redirect(referrer)
+    return redirect(url_for("inception.assumptions_list"))
+
+
+# T-3284: single implementation lives in web/shared.py (parity by construction,
+# L-399). The underscore alias keeps existing references and tests working.
+from web.shared import operator_facing_stderr as _operator_facing_stderr
+
+
+@bp.route("/inception/<task_id>/decide", methods=["POST"])
+def record_decision(task_id):
+    if not re_mod.match(r"^T-\d{3,}$", task_id):
+        abort(404)
+    decision = request.form.get("decision", "").strip().lower()
+    rationale = request.form.get("rationale", "").strip()
+    if decision not in ("go", "no-go", "defer") or not rationale:
+        abort(400)
+    # T-1120: Create review marker — the human IS reviewing by being on this page.
+    # Without this, fw inception decide blocks with "Task review required" because
+    # the marker is normally created by fw task review (CLI), not Watchtower.
+    import os
+    marker_dir = os.path.join(PROJECT_ROOT, ".context", "working")
+    os.makedirs(marker_dir, exist_ok=True)
+    marker_path = os.path.join(marker_dir, f".reviewed-{task_id}")
+    if not os.path.exists(marker_path):
+        with open(marker_path, "w") as f:
+            f.write(f"reviewed-via-watchtower {task_id}\n")
+    # T-1262: pass --from-watchtower to exempt the T-1259 CLAUDECODE guard.
+    # Flask inherits CLAUDECODE=1 from its parent Claude Code shell; without
+    # this flag, Watchtower's decide POST is blocked by the agent-invocation guard.
+    stdout, stderr, ok = run_fw_command(
+        ["inception", "decide", task_id, decision, "--rationale", rationale, "--from-watchtower"],
+        timeout=30,
+    )
+
+    # T-1470: distinguish "primary decision landed" from "side-effect failure".
+    # `fw inception decide` runs the primary decision FIRST (writes ## Decision
+    # block, ticks ACs, completes task), THEN side-effects (episodic gen,
+    # emit_review). A non-zero exit code from a side-effect was previously
+    # surfaced as 500 even though the decision was already recorded — the
+    # T-1455 GO incident (2026-04-25T07:22Z, T-1444 root cause).
+    primary_landed = _decision_recorded_in_task(task_id, decision)
+
+    if not ok:
+        import logging  # T-1223: log errors for debugging
+        logging.getLogger(__name__).error(
+            "inception decide %s failed: primary_landed=%s stdout=%r stderr=%r",
+            task_id, primary_landed, stdout[:500], stderr[:500]
+        )
+
+    # T-2053: commit the decision so it is P-002-traceable. fw inception decide
+    # writes + moves the file but does not git-commit; the Watchtower path has no
+    # agent follow-up, so without this every Watchtower decision is left
+    # uncommitted (T-2030). Graceful: a commit failure is non-fatal — surfaced as
+    # a warning, never a 500, and the decision stays on disk.
+    commit_ok, commit_msg = True, ""
+    if ok or primary_landed:
+        commit_ok, commit_msg = _commit_decision(task_id, decision)
+        if not commit_ok:
+            import logging
+            logging.getLogger(__name__).warning(
+                "decision %s recorded but not committed: %s", task_id, commit_msg
+            )
+
+    # If called via htmx (e.g., from /approvals page), return inline fragment (T-643)
+    if request.headers.get("HX-Request"):
+        if ok or primary_landed:
+            color = "#10b981" if decision == "go" else "#ef4444" if decision == "no-go" else "#6b7280"
+            label = decision.upper()
+            warning_html = ""
+            if not ok and primary_landed:
+                # T-1470: side-effect failure — show warning, not error.
+                # T-2219 (T-2217 Slice 1): widen 150 → 1500, HTML-escape, and use
+                # white-space:pre-wrap so multi-line stderr (e.g. the disposition
+                # gate's block message with bullet list + bypass options) renders
+                # readably instead of getting clipped at the first sentence.
+                # Mirrors the sibling escape+pre-wrap pattern at line ~579 (the
+                # pre-decision validation rejection path).
+                import html as _html
+                # T-3280: operator-facing translation — decision status + reason,
+                # bypass instructions and internal banners stripped.
+                _reason = _operator_facing_stderr((stderr or stdout)[:3000])[:1500]
+                warning_html = (
+                    f'<div style="color:#f59e0b; font-size:0.85rem; margin-top:4px; '
+                    f'white-space:pre-wrap;">'
+                    f'⚠ Your decision is saved. Automatic completion was blocked by a '
+                    f'framework gate — the agent session can recover this '
+                    f'(fw inception sweep); no action needed from you unless it persists.\n'
+                    f'Reason: {_html.escape(_reason)}'
+                    f'</div>'
+                )
+            if not commit_ok:
+                # T-2053: decision recorded but the auto-commit failed — surface it
+                # (no silent failure); the decision is still on disk for a later commit.
+                # T-2219: widen 150 → 1500 + pre-wrap, matching sibling above.
+                import html as _html
+                warning_html += (
+                    f'<div style="color:#f59e0b; font-size:0.85rem; margin-top:4px; '
+                    f'white-space:pre-wrap;">'
+                    f'⚠ Decision recorded but not committed: {_html.escape(commit_msg[:1500])}'
+                    f'</div>'
+                )
+            return (
+                f'<div class="approval-card" style="border-color:{color}; opacity:0.7;">'
+                f'<strong>{task_id}</strong>: Decision recorded — '
+                f'<span style="color:{color}; font-weight:700;">{label}</span>'
+                f'{warning_html}'
+                f'</div>'
+            )
+        # T-2051: the htmx failure path previously returned the reason with HTTP 500.
+        # htmx (hx-swap="outerHTML") does not swap non-2xx responses, so .go-decision
+        # was never replaced — the human saw the unchanged GO button and re-clicked
+        # (T-2030: 2× 500 before a 200). A pre-decision validation rejection (e.g.
+        # "## Recommendation section required") is an expected outcome, not a server
+        # fault. Return 200 with a swappable error fragment so htmx replaces the block
+        # and the reason is visible inline. The logging.error above preserves
+        # server-side observability regardless of the client-facing status.
+        import html as _html
+        # T-3280: same operator-facing translation on the failure path.
+        reason = _html.escape(
+            _operator_facing_stderr((stderr or stdout or "Unknown error from fw inception decide")[:3000])[:300]
+            or "Unknown error from fw inception decide"
+        )
+        return (
+            f'<div class="go-decision" style="border:1px solid #ef4444; border-radius:6px; padding:0.6rem;">'
+            f'<strong>{task_id}</strong>: '
+            f'<span style="color:#ef4444; font-weight:700;">Decision not recorded</span>'
+            f'<div style="color:#ef4444; font-size:0.85rem; margin-top:4px; white-space:pre-wrap;">{reason}</div>'
+            f'<div style="color:var(--pico-muted-color); font-size:0.8rem; margin-top:4px;">'
+            f'Resolve the issue above, then reload to retry.</div>'
+            f'</div>'
+        )
+
+    # T-1454 (OBS-017): non-htmx form path — surface failure via ?error= query param
+    # so the rendered inception_detail page can show a banner. Without this,
+    # the user sees a silent redirect and clicks GO repeatedly.
+    if not ok:
+        if primary_landed:
+            # T-1470: primary succeeded, surface as warning (not error).
+            # T-3284: sanitize like the htmx sibling above — this redirect path
+            # renders to the operator too, and previously leaked bypass flags.
+            warn = (_operator_facing_stderr((stderr or stdout or "")[:3000])
+                    or "side-effect warning")[:300]
+            return redirect(url_for("inception.inception_detail", task_id=task_id, warning=warn))
+        err = (_operator_facing_stderr((stderr or stdout or "")[:3000])
+               or "Unknown error from fw inception decide")[:300]
+        return redirect(url_for("inception.inception_detail", task_id=task_id, error=err))
+
+    # T-2053: success — surface a commit failure as a warning (no silent failure).
+    if not commit_ok:
+        return redirect(url_for(
+            "inception.inception_detail", task_id=task_id,
+            warning=f"Decision recorded but not committed: {commit_msg[:200]}",
+        ))
+    return redirect(url_for("inception.inception_detail", task_id=task_id))
+
+
+def _decision_recorded_in_task(task_id: str, decision: str) -> bool:
+    """T-1470: Detect if `fw inception decide` recorded the decision in the
+    task body, regardless of exit code. Used to separate "primary landed"
+    (return 200 + warning) from "primary failed" (return 500/error).
+
+    T-1746: previous version captured the `## Decision` section without
+    stripping HTML comments. The template placeholder
+    `<!-- ... fw inception decide T-XXX go|no-go ... -->` contains the
+    literal token "go|no-go", which after `.upper()` matched the keyword
+    check and produced false-positive `primary_landed=True`. Combined with
+    RC1 (validator regex too strict) and RC3 (template silent on
+    `?warning=`), this routed the user into a silent no-op on T-1744.
+    Origin: T-1745 RCA. Fix: strip comments AND require a non-commented
+    canonical `**Decision**:` line before honouring the keyword check."""
+    import os
+    import re as _re
+    # Task may be in active/ (defer) or completed/ (go/no-go)
+    for loc in ("completed", "active"):
+        d = os.path.join(PROJECT_ROOT, ".tasks", loc)
+        if not os.path.isdir(d):
+            continue
+        for fn in os.listdir(d):
+            if not fn.startswith(f"{task_id}-") or not fn.endswith(".md"):
+                continue
+            try:
+                with open(os.path.join(d, fn)) as f:
+                    body = f.read()
+            except OSError:
+                continue
+            # Look for `## Decision` block + the chosen decision keyword.
+            # T-1527: terminate at any H2-or-deeper heading so `### timestamp`
+            # Updates entries appended below the Decision section don't get
+            # captured into the keyword check (sister bug to T-1519/T-1526).
+            m = _re.search(r"^## Decision\b.*?(?=^#{2,} |\Z)", body, _re.MULTILINE | _re.DOTALL)
+            if not m:
+                continue
+            section = m.group(0)
+            # T-1746: strip HTML comments so template placeholder text doesn't
+            # leak into the verdict check.
+            stripped = _re.sub(r"<!--.*?-->", "", section, flags=_re.DOTALL)
+            # Require a non-commented Decision marker line and use the regex's
+            # verdict capture directly. Substring check `"GO" in "NO-GO"` is
+            # True (sub-bug from the original keyword approach) — match the
+            # verdict token explicitly instead.
+            #
+            # `fw inception decide` writes BOTH formats in different places:
+            #   lib/inception.sh:556 — `**Decision**: GO` (colon outside bold,
+            #     in the canonical ## Decision body)
+            #   lib/inception.sh:598 — `- **Decision:** GO` (colon inside bold,
+            #     in the Updates entry)
+            # Accept either by making the inner-`:`-`**` pair optional.
+            verdict_match = _re.search(
+                r"\*\*Decision(?::\*\*|\*\*:)\s*\**(GO|NO-GO|DEFER)\**",
+                stripped,
+                _re.IGNORECASE,
+            )
+            if not verdict_match:
+                continue
+            if verdict_match.group(1).upper() == decision.upper():
+                return True
+    return False
+
+
+def _is_decision_file(task_id: str, path: str) -> bool:
+    """T-2053: is `path` one of the decision's OWN files (task md + episodic)?
+
+    Used to scope the post-decision commit to exactly the files the decision
+    touched — the task file (in active/ for DEFER, completed/ for GO/NO-GO) and
+    the generated episodic — and nothing else (no unrelated working-tree churn).
+    """
+    import re as _re
+    return bool(
+        _re.match(rf"^\.tasks/(active|completed)/{_re.escape(task_id)}-.*\.md$", path)
+        or _re.match(rf"^\.context/episodic/{_re.escape(task_id)}(-.*)?\.yaml$", path)
+    )
+
+
+def _commit_decision(task_id: str, decision: str):
+    """T-2053: commit the recorded inception decision so it is P-002-traceable.
+
+    `fw inception decide` writes the `## Decision` block, moves the task file
+    (active→completed for GO/NO-GO) and generates the episodic, but it does NOT
+    git-commit — the CLI relies on the agent's commit-cadence to commit. The
+    Watchtower path has no agent follow-up, so without this the decision is left
+    as uncommitted working-tree changes (T-2030).
+
+    T-2708: built entirely against a SCRATCH index (`GIT_INDEX_FILE` seeded from
+    `git read-tree HEAD`), never the operator's real `.git/index`. Two decisions
+    recorded seconds apart in one operator batch are, to each other, the "foreign
+    staged file" a same-index guard would refuse — the old implementation staged
+    into the real index and self-blocked on exactly that (T-2708 RCA). Building
+    off-index removes the shared channel: only `wanted` paths are ever added to
+    the scratch index, so unrelated work (including another in-flight decision)
+    can never leak in — by construction, not by refusal — and a failed commit
+    leaves the real index untouched because it was never written to.
+
+    Graceful: returns `(committed: bool, message: str)`; a commit failure (e.g. a
+    commit-msg hook rejecting a DEFER without a research artifact) is non-fatal.
+
+    T-2864: the active→completed move is `git mv` whenever the task file is
+    tracked (update-task.sh, T-1523), so the normal porcelain form is a single
+    RENAME line (`RM old -> new`), NOT the delete + untracked-add pair this
+    docstring previously asserted. Both sides of that arrow must reach `wanted`
+    — see the loop below. The plain-`mv` two-line form only occurs when the file
+    was untracked, and is still handled.
+    """
+    import subprocess
+    import os  # T-2509: needed for the FW_ALLOW_MASTER_COMMIT env below
+    import tempfile
+    try:
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=30,
+        )
+        if status.returncode != 0:
+            return False, (_operator_facing_stderr(status.stderr or status.stdout or "")
+                           or "git status failed").strip()[:200]
+
+        wanted = []
+        for line in status.stdout.splitlines():
+            if not line.strip():
+                continue
+            path = line[3:]  # strip the 2-char XY status + the separating space
+            # T-2864: a staged rename reports `R  old -> new`, and BOTH sides are
+            # load-bearing. The scratch index below is seeded from HEAD, where
+            # `old` still exists — so naming only `new` leaves the task id under
+            # BOTH .tasks/active/ and .tasks/completed/ in the index we are about
+            # to commit, and the G-052 dup-task-ID pre-commit gate refuses it.
+            # The decision is then recorded on disk and absent from history.
+            #
+            # This is the NORMAL case, not a defensive edge: update-task.sh
+            # archives with `git mv` when the file is tracked (T-1523), which
+            # stages the rename in the real index. Measured, not assumed:
+            #   RM .tasks/active/T-x.md -> .tasks/completed/T-x.md
+            # (Origin: T-2863's GO decision, refused at the commit boundary.)
+            for cand in (path.split(" -> ", 1) if " -> " in path else [path]):
+                cand = cand.strip().strip('"')
+                if _is_decision_file(task_id, cand):
+                    wanted.append(cand)
+
+        if not wanted:
+            # Nothing of ours to commit (already committed, or no files found).
+            return True, "nothing to commit"
+
+        # T-2509: when the Watchtower serves from a checkout that sits on master
+        # with PROTECT_MASTER=1 (the T-100196 trunk-based flow), the T-2394
+        # master-guard pre-commit hook BLOCKS this direct commit ("master is
+        # merge-only"), leaving every operator decision recorded-but-uncommitted.
+        # A decision made through the Watchtower IS the human's sovereign act via
+        # the sanctioned surface (same principle as the --from-watchtower exemption
+        # for the CLAUDECODE agent-block, T-1262). FW_ALLOW_MASTER_COMMIT=1 is the
+        # master-guard's own documented Tier-2 bypass for exactly this "rare,
+        # deliberate" master write — it WARNs to stderr (auditable) and allows the
+        # commit. Scoped to THIS subprocess only (not os.environ) so agent/session
+        # commits on master stay guarded. Off master / on a feature branch the
+        # guard exits before the bypass matters, so this is a safe no-op there.
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            scratch_index = os.path.join(tmp_dir, "index")
+            _env = {
+                **os.environ,
+                "GIT_INDEX_FILE": scratch_index,
+                "FW_ALLOW_MASTER_COMMIT": "1",
+            }
+
+            # Seed the scratch index from HEAD — NOT from the operator's real
+            # index — so nothing pre-staged there (by an agent session, or by
+            # another decision landed a moment ago) is ever visible to us.
+            read_tree = subprocess.run(
+                ["git", "read-tree", "HEAD"],
+                cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=30,
+                env=_env,
+            )
+            if read_tree.returncode != 0:
+                return False, (_operator_facing_stderr(read_tree.stderr or read_tree.stdout or "")
+                               or "git read-tree failed").strip()[:200]
+
+            # `git add` on the scratch index reads the working tree (shared) but
+            # writes only to GIT_INDEX_FILE (not shared) — an explicit pathspec
+            # here stages the active→completed deletion too (git treats a named,
+            # now-missing path as "remove it", unlike a glob).
+            add = subprocess.run(
+                ["git", "add", "--"] + wanted,
+                cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=30,
+                env=_env,
+            )
+            if add.returncode != 0:
+                return False, (_operator_facing_stderr(add.stderr or add.stdout or "")
+                               or "git add failed").strip()[:200]
+
+            msg = f"{task_id}: inception decision {decision.upper()} (via Watchtower)"
+            commit = subprocess.run(
+                ["git", "commit", "-m", msg],
+                cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=30,
+                env=_env,
+            )
+            if commit.returncode != 0:
+                return False, (_operator_facing_stderr(commit.stderr or commit.stdout or "")
+                               or "git commit failed").strip()[:200]
+            return True, msg
+    except Exception as e:  # never let a commit problem break the decision response
+        return False, str(e)[:200]
+
+
+@bp.route("/assumptions")
+def assumptions_list():
+    assumptions = _load_assumptions()
+
+    # Filter
+    status_filter = request.args.get("status", "").strip().lower()
+    if status_filter:
+        assumptions = [a for a in assumptions if a.get("status", "").lower() == status_filter]
+
+    task_filter = request.args.get("task", "").strip()
+    if task_filter:
+        assumptions = [a for a in assumptions if a.get("linked_task") == task_filter]
+
+    # Summary
+    all_assumptions = _load_assumptions()
+    summary = {
+        "total": len(all_assumptions),
+        "validated": len([a for a in all_assumptions if a.get("status") == "validated"]),
+        "invalidated": len([a for a in all_assumptions if a.get("status") == "invalidated"]),
+        "untested": len([a for a in all_assumptions if a.get("status") == "untested"]),
+    }
+
+    return render_page(
+        "assumptions.html",
+        page_title="Assumptions",
+        assumptions=assumptions,
+        summary=summary,
+        status_filter=status_filter,
+        task_filter=task_filter,
+    )

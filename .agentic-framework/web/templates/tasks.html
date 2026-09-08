@@ -1,0 +1,711 @@
+{% from '_partials/inline_select.html' import inline_select %}
+{% from '_partials/arc_badge.html' import arc_badge %}
+{% from '_partials/bvp_badge.html' import bvp_badge %}
+<style>
+/* ── Full-width override for tasks page ────────────────── */
+main.container:has(.kanban-board),
+main.container:has(.tasks-toolbar) {
+    max-width: 100% !important;
+    padding-left: 1.5rem !important;
+    padding-right: 1.5rem !important;
+}
+/* Tighter toolbar for tasks page */
+.tasks-toolbar {
+    display: flex !important;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.5rem;
+}
+.tasks-toolbar-left {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+}
+.tasks-toolbar-left h1 { margin: 0 !important; font-size: 1.5rem; }
+.tasks-toolbar-left .task-count { color: var(--pico-muted-color); font-size: 0.85rem; }
+.tasks-toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+/* ── View Toggle ────────────────────────────────────────── */
+.view-toggle {
+    display: inline-flex;
+    gap: 0;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: var(--pico-border-radius);
+    overflow: hidden;
+}
+.view-toggle a {
+    padding: 0.25rem 0.7rem;
+    font-size: 0.8rem;
+    text-decoration: none;
+    color: var(--pico-color);
+    background: transparent;
+    border-right: 1px solid var(--pico-muted-border-color);
+    transition: background 0.15s;
+}
+.view-toggle a:last-child { border-right: none; }
+.view-toggle a:hover { background: var(--pico-primary-focus); }
+.view-toggle a.active {
+    background: var(--pico-primary);
+    color: var(--pico-primary-inverse);
+}
+
+/* ── Create Task Form ───────────────────────────────────── */
+.create-task-panel {
+    margin: 0;
+}
+.create-task-panel summary {
+    cursor: pointer;
+    font-weight: 600;
+    padding: 0.3rem 0.65rem;
+    background: var(--pico-primary);
+    color: var(--pico-primary-inverse);
+    border-radius: var(--pico-border-radius);
+    display: inline-block;
+    font-size: 0.8rem;
+    list-style: none;
+    white-space: nowrap;
+}
+.create-task-panel summary::-webkit-details-marker { display: none; }
+.create-task-panel summary::marker { content: ""; }
+.create-task-panel[open] summary {
+    margin-bottom: 0;
+}
+/* Form drops below toolbar when open */
+.create-task-form-wrapper {
+    position: absolute;
+    right: 0;
+    top: 100%;
+    z-index: 10;
+    width: min(600px, 90vw);
+    margin-top: 0.25rem;
+}
+.create-task-form {
+    padding: 1rem;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: var(--pico-border-radius);
+    background: var(--pico-card-background-color);
+}
+.create-task-form .form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+}
+.create-task-form label {
+    font-size: 0.85rem;
+    margin-bottom: 0.25rem;
+}
+.create-task-form textarea {
+    min-height: 4rem;
+    margin-bottom: 0.5rem;
+}
+
+/* ── Kanban Board ───────────────────────────────────────── */
+.kanban-board {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.5rem;
+    align-items: start;
+}
+@media (max-width: 992px) {
+    .kanban-board {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+@media (max-width: 576px) {
+    .kanban-board {
+        grid-template-columns: 1fr;
+    }
+}
+
+.kanban-column {
+    min-height: 4rem;
+    background: var(--pico-card-background-color);
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: var(--pico-border-radius);
+    padding: 0.5rem;
+    overflow: hidden;
+}
+.kanban-column-header {
+    font-weight: 700;
+    font-size: 0.8rem;
+    margin-bottom: 0.5rem;
+    padding-bottom: 0.35rem;
+    border-bottom: 2px solid var(--pico-muted-border-color);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.kanban-column-header .count {
+    font-weight: 400;
+    font-size: 0.8rem;
+    color: var(--pico-muted-color);
+}
+
+/* Column border colors — generated dynamically, see kanban-status-colors block below */
+
+/* ── Kanban Cards ───────────────────────────────────────── */
+.kanban-card {
+    margin: 0 0 0.35rem 0;
+    padding: 0.35rem 0.5rem;
+    font-size: 0.8rem;
+    border-radius: var(--pico-border-radius);
+    border: 1px solid var(--pico-muted-border-color);
+    background: var(--pico-background-color);
+}
+.kanban-card:last-child { margin-bottom: 0; }
+
+/* Left border accent per status — generated dynamically below */
+
+.kanban-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.15rem;
+}
+/* ── Completed column cap (last status in enum) ────────── */
+.kanban-column:last-child .kanban-card:nth-child(n+12) {
+    display: none;
+}
+.kanban-overflow-note {
+    font-size: 0.75rem;
+    color: var(--pico-muted-color);
+    text-align: center;
+    padding: 0.25rem 0;
+    font-style: italic;
+}
+.kanban-card-id {
+    font-weight: 700;
+    font-size: 0.8rem;
+    color: var(--pico-primary);
+    text-decoration: none;
+}
+.kanban-card-id:hover {
+    text-decoration: underline;
+}
+.kanban-card-name {
+    display: block;
+    margin-bottom: 0.2rem;
+    line-height: 1.25;
+    color: var(--pico-color);
+    font-size: 0.78rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.kanban-card-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+.kanban-card-meta .badge {
+    font-size: 0.7rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    background: var(--pico-muted-border-color);
+    color: var(--pico-muted-color);
+    white-space: nowrap;
+}
+.kanban-card-meta .owner {
+    font-size: 0.75rem;
+    color: var(--pico-muted-color);
+}
+.kanban-card-meta .horizon-badge {
+    font-size: 0.65rem;
+    padding: 0.05rem 0.35rem;
+    border-radius: 3px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+.horizon-now { background: #1b5e20; color: #fff; }
+.horizon-next { background: #e65100; color: #fff; }
+.horizon-later { background: var(--pico-muted-border-color); color: var(--pico-muted-color); }
+.advance-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    padding: 0;
+    margin: 0;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 3px;
+    background: transparent;
+    color: var(--pico-muted-color);
+    cursor: pointer;
+    font-size: 0.8rem;
+    line-height: 1;
+    flex-shrink: 0;
+}
+.advance-btn:hover {
+    background: var(--pico-primary-focus);
+    color: var(--pico-primary);
+    border-color: var(--pico-primary);
+}
+.kanban-empty {
+    font-size: 0.8rem;
+    color: var(--pico-muted-color);
+    text-align: center;
+    padding: 1rem 0;
+}
+/* ── Editable name on Kanban cards ─────────────────────── */
+.editable-kanban-name {
+    cursor: pointer;
+    border-bottom: 1px dashed transparent;
+    transition: border-color 0.15s;
+}
+.editable-kanban-name:hover {
+    border-bottom-color: var(--pico-primary);
+    white-space: normal;
+}
+.kanban-name-input {
+    font-size: 0.78rem;
+    padding: 0.1rem 0.2rem;
+    margin: 0;
+    width: 100%;
+    border: 1px solid var(--pico-primary);
+    border-radius: 3px;
+    background: var(--pico-background-color);
+    line-height: 1.25;
+}
+
+/* ── List View Inline Status ────────────────────────────── */
+.inline-status-select {
+    padding: 0.2rem 0.4rem;
+    font-size: 0.8rem;
+    margin: 0;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 3px;
+    background: transparent;
+    min-width: 0;
+    width: auto;
+}
+td .status-update-result, td .horizon-update-result, td .type-update-result, td .owner-update-result {
+    font-size: 0.75rem;
+}
+
+/* ── Inline Horizon Select (Kanban + List) ────────────── */
+.inline-horizon-select {
+    padding: 0.1rem 0.3rem;
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    margin: 0;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 3px;
+    background: transparent;
+    min-width: 0;
+    width: auto;
+    cursor: pointer;
+}
+
+/* ── Inline Owner Select (Kanban + List) ──────────────── */
+.inline-owner-select {
+    padding: 0.1rem 0.3rem;
+    font-size: 0.7rem;
+    margin: 0;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 3px;
+    background: transparent;
+    min-width: 0;
+    width: auto;
+    cursor: pointer;
+    color: var(--pico-muted-color);
+}
+
+/* ── Inline Type Select (Kanban + List) ───────────────── */
+.inline-type-select {
+    padding: 0.1rem 0.3rem;
+    font-size: 0.7rem;
+    margin: 0;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 3px;
+    background: transparent;
+    min-width: 0;
+    width: auto;
+    cursor: pointer;
+    color: var(--pico-muted-color);
+}
+
+/* ── Inline Status Select (Kanban) ────────────────────── */
+.inline-kanban-status-select {
+    padding: 0.15rem 0.3rem;
+    font-size: 0.7rem;
+    margin: 0;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 3px;
+    background: transparent;
+    min-width: 0;
+    width: auto;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+/* ── Dynamic status colors (T-1197/G-041) ─────────────── */
+/* Status → color mapping. Default is muted; known statuses get colors. */
+{% set status_colors = {
+    'captured': 'var(--pico-muted-border-color)',
+    'started-work': '#2196f3',
+    'issues': '#c62828',
+    'work-completed': '#2e7d32'
+} %}
+{% for s in enum_statuses|default(['captured','started-work','issues','work-completed']) %}
+{% set color = status_colors.get(s, 'var(--pico-muted-border-color)') %}
+.kanban-column[data-status="{{ s }}"] .kanban-column-header { border-bottom-color: {{ color }}; }
+{% if color != 'var(--pico-muted-border-color)' %}
+.kanban-column[data-status="{{ s }}"] .kanban-card { border-left: 3px solid {{ color }}; }
+{% endif %}
+{% endfor %}
+</style>
+
+<div class="tasks-toolbar">
+    <div class="tasks-toolbar-left">
+        <h1>Tasks</h1>
+        <span class="task-count">{{ tasks|length }}</span>
+    </div>
+    <div class="tasks-toolbar-right">
+        <div class="view-toggle">
+            <a href="/tasks?view=board"
+               hx-get="/tasks?view=board" hx-target="#content" hx-push-url="true"
+               class="{% if view == 'board' %}active{% endif %}">Board</a>
+            <a href="/tasks?view=list"
+               hx-get="/tasks?view=list" hx-target="#content" hx-push-url="true"
+               class="{% if view == 'list' %}active{% endif %}">List</a>
+        </div>
+        <details class="create-task-panel" style="position:relative;">
+            <summary>+ New</summary>
+            <div class="create-task-form-wrapper">
+                <div class="create-task-form">
+                    <form id="create-task-form" hx-post="/api/task/create" hx-target="#create-result" hx-swap="innerHTML">
+                        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                        <div class="form-row" style="grid-template-columns: 2fr 1fr 1fr 1fr;">
+                            <div>
+                                <label for="task-name">Name</label>
+                                <input type="text" id="task-name" name="name" placeholder="Task name" required>
+                            </div>
+                            <div>
+                                <label for="task-type">Type</label>
+                                <select id="task-type" name="type">
+                                    {% for t in enum_types %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+                                </select>
+                            </div>
+                            <div>
+                                <label for="task-owner">Owner</label>
+                                <select id="task-owner" name="owner">
+                                    {% for o in enum_owners %}<option value="{{ o }}">{{ o }}</option>{% endfor %}
+                                </select>
+                            </div>
+                            <div>
+                                <label for="task-horizon">Horizon</label>
+                                <select id="task-horizon" name="horizon">
+                                    {% for h in enum_horizons %}<option value="{{ h }}">{{ h }}</option>{% endfor %}
+                                </select>
+                            </div>
+                        </div>
+                        <label for="task-desc">Description</label>
+                        <textarea id="task-desc" name="description" placeholder="Optional description"></textarea>
+                        <button type="submit">Create</button>
+                    </form>
+                    <div id="create-result"></div>
+                </div>
+            </div>
+        </details>
+    </div>
+</div>
+
+{# ── Shared filter bar (board + list) ──────────────────── #}
+<div style="display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; font-size: 0.8rem;">
+    <input type="text" name="q" value="{{ search_query }}" placeholder="Search tasks..."
+           style="flex: 1; min-width: 10rem; max-width: 20rem; padding: 0.3rem 0.6rem; font-size: 0.8rem; margin: 0;"
+           hx-get="/tasks" hx-target="#content" hx-push-url="true" hx-trigger="keyup changed delay:300ms"
+           hx-include="[name='owner'],[name='horizon'],[name='tag'],[name='status'],[name='type'],[name='component'],[name='sort'],[name='view']">
+    <select name="owner" class="btn-sm"
+            hx-get="/tasks" hx-target="#content" hx-push-url="true"
+            hx-include="[name='q'],[name='horizon'],[name='tag'],[name='status'],[name='type'],[name='component'],[name='sort'],[name='view']">
+        <option value="">All Owners</option>
+        {% for o in owners %}
+        <option value="{{ o }}" {% if owner_filter == o %}selected{% endif %}>{{ o }}</option>
+        {% endfor %}
+    </select>
+    <select name="horizon" class="btn-sm"
+            hx-get="/tasks" hx-target="#content" hx-push-url="true"
+            hx-include="[name='q'],[name='owner'],[name='tag'],[name='status'],[name='type'],[name='component'],[name='sort'],[name='view']">
+        <option value="">All Horizons</option>
+        {# T-2160 (arc-009 Slice 1): render-only list includes 'past' (derived
+           from .tasks/completed/). Storage enum stays now/next/later — past
+           is filter-only, not editable. #}
+        {% for h in enum_render_horizons %}
+        <option value="{{ h }}" {% if horizon_filter == h %}selected{% endif %}>{{ h }}</option>
+        {% endfor %}
+    </select>
+    {% if all_tags %}
+    <select name="tag" class="btn-sm"
+            hx-get="/tasks" hx-target="#content" hx-push-url="true"
+            hx-include="[name='q'],[name='owner'],[name='horizon'],[name='status'],[name='type'],[name='component'],[name='sort'],[name='view']">
+        <option value="">All Tags</option>
+        {% for tg in all_tags %}
+        <option value="{{ tg }}" {% if tag_filter == tg %}selected{% endif %}>{{ tg }}</option>
+        {% endfor %}
+    </select>
+    {% endif %}
+    <input type="hidden" name="view" value="{{ view }}">
+    {# ── arc-007 S4c (T-2016): one removable chip per active filter ──────── #}
+    {% if active_filter_chips %}
+    <div class="filter-chips" style="display: inline-flex; flex-wrap: wrap; gap: 0.35rem; align-items: center;">
+        {% for chip in active_filter_chips %}
+        <span class="filter-chip" data-filter-chip="{{ chip.key }}"
+              style="display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.15rem 0.55rem; border-radius: 999px; background: var(--pico-secondary-background); font-size: 0.78rem; font-weight: 600;">
+            {{ chip.label }}
+            <a href="{{ chip.clear_url }}" hx-get="{{ chip.clear_url }}" hx-target="#content" hx-push-url="true"
+               class="filter-chip-clear" title="Clear {{ chip.label }}" aria-label="Clear {{ chip.label }}"
+               style="text-decoration: none; color: inherit;">&times;</a>
+        </span>
+        {% endfor %}
+        <a href="/tasks?view={{ view }}" hx-get="/tasks?view={{ view }}" hx-target="#content" hx-push-url="true"
+           class="filter-chips-clear-all"
+           style="font-size: 0.75rem; color: var(--pico-muted-color); text-decoration: none; cursor: pointer;">&times; Clear all</a>
+    </div>
+    {% endif %}
+</div>
+
+{% if view == 'board' %}
+<!-- ════════════════════════════════════════════════════════
+     KANBAN BOARD VIEW
+     ════════════════════════════════════════════════════════ -->
+{% set status_display = {'captured':'Captured','started-work':'In Progress','issues':'Issues','work-completed':'Completed'} %}
+{% set _statuses = enum_statuses|default(['captured','started-work','issues','work-completed']) %}
+{% set tasks_by_status = {} %}
+{% for s in _statuses %}
+{% set _ = tasks_by_status.update({s: tasks|selectattr('status', 'equalto', s)|list}) %}
+{% endfor %}
+
+<div class="kanban-board">
+    {# ── Kanban card macro ─────────────────────────────────── #}
+    {% macro kanban_card(task) %}
+    {# S4d (T-2019): draggable + data-task-id → kanban-drag.js drags the card onto another
+       .kanban-column and POSTs the target column's status to /api/task/<id>/status. #}
+    <article class="kanban-card" draggable="true" data-task-id="{{ task.id }}">
+        <div class="kanban-card-header">
+            {# S4e (T-2018): bulk multi-select checkbox — bulk-actions.js owns it. #}
+            <input type="checkbox" class="wt-bulk-select" data-bulk-select="{{ task.id }}"
+                   title="Select for bulk action" aria-label="Select {{ task.id }}">
+            {# S4a (T-2015): data-task-panel opens the slide-in panel; hx-boost=false
+               keeps the href as the no-JS full-page fallback (task-panel.js owns the click). #}
+            <a href="/tasks/{{ task.id }}" class="kanban-card-id"
+               data-task-panel="{{ task.id }}" hx-boost="false">{{ task.id }}</a>
+            {{ inline_select(task.id, 'status', enum_statuses|default(['captured','started-work','issues','work-completed']), task.status, select_class='inline-kanban-status-select', hx_target='closest .kanban-card', hx_swap='none', form_class='inline-reset') }}
+        </div>
+        <span class="kanban-card-name editable-kanban-name" title="{{ task.name }}"
+              onclick="startKanbanNameEdit(this, '{{ task.id }}')">{{ task.name }}</span>
+        <div class="kanban-card-meta">
+            {{ inline_select(task.id, 'type', enum_types, task.workflow_type, select_class='inline-type-select', hx_target='closest .kanban-card', hx_swap='none', form_class='inline-reset') }}
+            {{ inline_select(task.id, 'horizon', enum_horizons, task.horizon, select_class='inline-horizon-select horizon-select', hx_target='closest .kanban-card', hx_swap='none', form_class='inline-reset') }}
+            {{ inline_select(task.id, 'owner', enum_owners, task.owner, select_class='inline-owner-select', hx_target='closest .kanban-card', hx_swap='none', form_class='inline-reset') }}
+            {{ arc_badge(task) }}
+            {{ bvp_badge(task) }}
+        </div>
+    </article>
+    {% endmacro %}
+
+    {# ── Dynamic kanban columns from enum_statuses (T-1197/G-041) ── #}
+    {% for s in _statuses %}
+    {% set col_tasks = tasks_by_status.get(s, []) %}
+    {% set is_last = loop.last %}
+    <div class="kanban-column" data-status="{{ s }}">
+        <div class="kanban-column-header">
+            {{ status_display.get(s, s|replace('-',' ')|title) }} <span class="count">({{ col_tasks|length }})</span>
+        </div>
+        {% for task in (col_tasks[:10] if is_last else col_tasks) %}
+        {{ kanban_card(task) }}
+        {% else %}
+        <div class="kanban-empty">No tasks</div>
+        {% endfor %}
+        {% if is_last and col_tasks|length > 10 %}
+        <div class="kanban-overflow-note">
+            <a href="/tasks?view=list&status={{ s }}"
+               hx-get="/tasks?view=list&status={{ s }}" hx-target="#content" hx-push-url="true">
+                +{{ col_tasks|length - 10 }} more &rarr;
+            </a>
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Inline editing + reload after actions -->
+<script>
+/* ── Kanban card name editing ─────────────────────────── */
+function startKanbanNameEdit(span, taskId) {
+    var current = span.textContent.trim();
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.value = current;
+    input.className = 'kanban-name-input';
+    var done = false;
+
+    function finish(newText) {
+        if (done) return;
+        done = true;
+        span.textContent = newText;
+        span.title = newText;
+        if (input.parentNode) input.replaceWith(span);
+    }
+
+    function save() {
+        if (done) return;
+        var newName = input.value.trim();
+        if (!newName || newName === current) {
+            finish(current);
+            return;
+        }
+        input.classList.add('wt-saving');
+        var fd = new FormData();
+        fd.append('name', newName);
+        var csrfEl = input.closest('.kanban-card');
+        var csrf = csrfEl ? csrfEl.querySelector('input[name="_csrf_token"]') : null;
+        if (csrf) { fd.append('_csrf_token', csrf.value); }
+        else {
+            var meta = document.querySelector('meta[name="csrf-token"]');
+            if (meta) fd.append('_csrf_token', meta.content);
+        }
+        fetch('/api/task/' + taskId + '/name', { method: 'POST', body: fd })
+            .then(function(r) {
+                if (r.ok) { finish(newName); showToast('Name saved', 'success'); }
+                else { r.text().then(function(t) { showToast(t.replace(/<[^>]*>/g,'').trim() || 'Save failed', 'error'); }); finish(current); }
+            })
+            .catch(function() { showToast('Network error', 'error'); finish(current); });
+    }
+
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); save(); }
+        if (e.key === 'Escape') { finish(current); }
+    });
+    // Prevent card link navigation when clicking the input
+    input.addEventListener('click', function(e) { e.stopPropagation(); });
+
+    span.replaceWith(input);
+    input.focus();
+    input.select();
+}
+
+document.addEventListener('htmx:afterRequest', function(event) {
+    var form = event.detail.elt;
+    if (!form || !event.detail.successful) return;
+
+    // Reload board after kanban inline selectors (status change moves cards between columns)
+    if (form.closest && form.closest('.kanban-card')) {
+        var select = form.querySelector('select');
+        if (select && select.name === 'status') {
+            // Status change — reload whole board since card moves columns
+            htmx.ajax('GET', '/tasks?view=board', {target: '#content', swap: 'innerHTML'}).then(function() {
+                window.scrollTo(0, 0);
+            });
+        }
+        return;
+    }
+
+    // Reload task list after creating a task
+    if (form.id === 'create-task-form') {
+        var view = '{{ view }}';
+        setTimeout(function() {
+            htmx.ajax('GET', '/tasks?view=' + view, {target: '#content', swap: 'innerHTML'});
+        }, 800);
+    }
+});
+</script>
+
+{% else %}
+<!-- ════════════════════════════════════════════════════════
+     LIST VIEW
+     ════════════════════════════════════════════════════════ -->
+
+<!-- List-specific filters (status, type, component, sort) -->
+{% set all_filters = "[name='q'],[name='owner'],[name='horizon'],[name='tag'],[name='status'],[name='type'],[name='component'],[name='sort'],[name='view']" %}
+<div class="grid" style="margin-bottom: 1rem;">
+    <select name="status" hx-get="/tasks" hx-target="#content" hx-push-url="true"
+            hx-include="{{ all_filters }}">
+        <option value="">All Statuses</option>
+        {% for s in enum_statuses|default(['captured','started-work','issues','work-completed']) %}
+        <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+    </select>
+    <select name="type" hx-get="/tasks" hx-target="#content" hx-push-url="true"
+            hx-include="{{ all_filters }}">
+        <option value="">All Types</option>
+        {% for t in types %}
+        <option value="{{ t }}" {% if type_filter == t %}selected{% endif %}>{{ t }}</option>
+        {% endfor %}
+    </select>
+    <select name="component" hx-get="/tasks" hx-target="#content" hx-push-url="true"
+            hx-include="{{ all_filters }}">
+        <option value="">All Components</option>
+        {% for c in components %}
+        <option value="{{ c }}" {% if component_filter == c %}selected{% endif %}>{{ c }}</option>
+        {% endfor %}
+    </select>
+    <select name="sort" hx-get="/tasks" hx-target="#content" hx-push-url="true"
+            hx-include="{{ all_filters }}">
+        <option value="id" {% if sort_by == 'id' %}selected{% endif %}>Sort by ID</option>
+        <option value="name" {% if sort_by == 'name' %}selected{% endif %}>Sort by Name</option>
+    </select>
+</div>
+
+<!-- Task table -->
+<table>
+    <thead>
+        <tr>
+            <th></th>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Status</th>
+            <th>Horizon</th>
+            <th>Type</th>
+            <th>Owner</th>
+            <th>Arc</th>
+            <th>BVP</th>
+            <th>Tags</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for task in tasks %}
+        <tr>
+            {# S4e (T-2018): bulk multi-select checkbox #}
+            <td><input type="checkbox" class="wt-bulk-select" data-bulk-select="{{ task.id }}"
+                       title="Select for bulk action" aria-label="Select {{ task.id }}"></td>
+            <td><a href="/tasks/{{ task.id }}"
+                   data-task-panel="{{ task.id }}" hx-boost="false">{{ task.id }}</a></td>
+            <td><span class="editable-kanban-name" style="white-space:normal;"
+                      onclick="startKanbanNameEdit(this, '{{ task.id }}')"
+                      title="Click to edit">{{ task.name }}</span></td>
+            <td>
+                {{ inline_select(task.id, 'status', enum_statuses|default(['captured','started-work','issues','work-completed']), task.status, hx_target='next .status-update-result', form_class='inline-flex-center gap-xs') }}
+                <span class="status-update-result"></span>
+            </td>
+            <td>
+                {{ inline_select(task.id, 'horizon', enum_horizons, task.horizon, select_class='inline-status-select horizon-select', hx_target='next .horizon-update-result', form_class='inline-flex-center gap-xs') }}
+                <span class="horizon-update-result"></span>
+            </td>
+            <td>
+                {{ inline_select(task.id, 'type', enum_types, task.workflow_type, hx_target='next .type-update-result', form_class='inline-flex-center gap-xs') }}
+                <span class="type-update-result"></span>
+            </td>
+            <td>
+                {{ inline_select(task.id, 'owner', enum_owners, task.owner, hx_target='next .owner-update-result', form_class='inline-flex-center gap-xs') }}
+                <span class="owner-update-result"></span>
+            </td>
+            <td>{{ arc_badge(task) }}</td>
+            <td>{{ bvp_badge(task) }}</td>
+            <td><small>{{ task._tags[:3]|join(', ') }}</small></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}

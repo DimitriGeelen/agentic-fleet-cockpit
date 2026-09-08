@@ -1,0 +1,70 @@
+#!/bin/bash
+# fw-shim — Project-detecting wrapper for the Agentic Engineering Framework CLI
+#
+# This shim replaces the symlink to $HOME/.agentic-framework/bin/fw.
+# Instead of routing all `fw` calls to a global install, it walks up from
+# CWD to find the project-local fw and execs it.
+#
+# Resolution order:
+#   1. bin/fw          — framework repo (has FRAMEWORK.md at root)
+#   2. .agentic-framework/bin/fw — consumer project (vendored framework)
+#
+# Install: copy to ~/.local/bin/fw (or anywhere on PATH)
+# Origin: T-664 (Phase 2 of T-662: eliminate global install dependency)
+
+set -euo pipefail
+
+# Walk up from CWD looking for a framework project
+find_fw() {
+    local dir="$PWD"
+    while [ "$dir" != "/" ]; do
+        # Framework repo: has bin/fw + FRAMEWORK.md
+        if [ -x "$dir/bin/fw" ] && [ -f "$dir/FRAMEWORK.md" ]; then
+            echo "$dir/bin/fw"
+            return 0
+        fi
+        # Consumer project: has vendored .agentic-framework/bin/fw
+        if [ -x "$dir/.agentic-framework/bin/fw" ]; then
+            echo "$dir/.agentic-framework/bin/fw"
+            return 0
+        fi
+        dir="$(dirname "$dir")"
+    done
+    return 1
+}
+
+fw_path=$(find_fw) || {
+    echo "fw: No framework project detected in this directory tree." >&2
+    echo "" >&2
+    echo "  Run from a project directory that has either:" >&2
+    echo "    - bin/fw + FRAMEWORK.md  (framework repo)" >&2
+    echo "    - .agentic-framework/    (consumer project)" >&2
+    echo "" >&2
+    echo "  To initialize a new project:" >&2
+    echo "    cd /path/to/your/project" >&2
+    echo "    /path/to/framework/bin/fw init" >&2
+    echo "" >&2
+    exit 1
+}
+
+# T-1278: Self-loop guard — if the discovered fw_path is THIS shim, abort.
+# Happens when `bin/fw` inside a framework repo gets overwritten with shim
+# content (past upgrade.sh bug walked a symlink into the repo). Without this
+# guard, the shim exec's itself forever until a wrapping timeout kills it.
+if [ "$(realpath "$fw_path" 2>/dev/null)" = "$(realpath "${BASH_SOURCE[0]}" 2>/dev/null)" ]; then
+    echo "fw: Shim self-loop detected — the discovered bin/fw is this shim itself." >&2
+    echo "" >&2
+    echo "  Path: $fw_path" >&2
+    echo "" >&2
+    echo "  The real CLI is missing from this project. Likely causes:" >&2
+    echo "    - bin/fw was overwritten by a prior 'fw upgrade' bug (fixed in lib/upgrade.sh)" >&2
+    echo "    - Manual mis-copy of fw-shim over bin/fw" >&2
+    echo "" >&2
+    echo "  Restore:" >&2
+    echo "    cd <framework-repo-root>" >&2
+    echo "    git checkout HEAD -- bin/fw" >&2
+    echo "" >&2
+    exit 2
+fi
+
+exec "$fw_path" "$@"

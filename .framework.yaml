@@ -1,0 +1,10 @@
+# Agentic Engineering Framework - Project Configuration
+# framework_path removed (T-498) — fw resolves from .agentic-framework/bin/fw location
+project_name: 055-agentic-fleet-cockpit
+version: 1.6.768
+provider: claude
+initialized_at: 2026-09-08T18:03:50Z
+upstream_repo: https://github.com/DimitriGeelen/agentic-engineering-framework.git
+upgraded_from: 1.6.474
+version_sha: a6bea48819460a0f250f8983a48fca267e422483
+last_upgrade: 2026-09-08T18:05:14Z

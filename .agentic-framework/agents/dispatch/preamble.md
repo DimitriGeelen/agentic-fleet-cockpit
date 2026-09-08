@@ -1,0 +1,224 @@
+# Mandatory Dispatch Preamble
+
+> Include this text block at the TOP of every sub-agent dispatch prompt.
+> This is not optional. Omitting it causes context explosion (T-073: 177K spike).
+
+## The Preamble (copy this into every dispatch prompt)
+
+```
+## OUTPUT RULES — MANDATORY, NON-NEGOTIABLE
+
+You are a sub-agent with a STRICT output budget. The orchestrator that spawned
+you has limited context. Violating these rules will crash the session.
+
+1. **Write all detailed output to disk** using the Write tool
+   - Output file: /tmp/fw-agent-{describe-your-task-briefly}.md
+   - Write BEFORE composing your final response
+
+2. **Your final response MUST be ≤ 5 lines:**
+   - Line 1: DONE or FAIL
+   - Line 2: Output file path
+   - Line 3: One-sentence summary of findings
+   - Line 4-5: (optional) Critical numbers only (e.g., "Pass: 80 | Fail: 3")
+
+3. **NEVER return in your response:**
+   - File contents (even partial)
+   - Code blocks longer than 3 lines
+   - YAML/JSON data
+   - Lists longer than 5 items
+   - Full error traces
+
+4. The orchestrator will read your output file if it needs details.
+
+EXAMPLE GOOD RESPONSE:
+  DONE
+  /tmp/fw-agent-ac-audit.md
+  Audited 212 tasks: 126 REAL (59%), 86 problematic (41%)
+  Before P-010: 20% REAL | After P-010: 94.5% REAL
+
+EXAMPLE BAD RESPONSE:
+  Here are the detailed findings for each task:
+  T-001: REAL - has 3 checked ACs...
+  T-002: MISSING - no AC section...
+  [200 more lines]
+```
+
+## Fabric Awareness (T-247)
+
+When your task involves **modifying source files**, follow these rules:
+
+1. **Before editing a registered component**, check its dependents:
+   - Run: `fw fabric deps <file-path>` to see what depends on it
+   - If it has >5 dependents, mention this in your summary so the orchestrator can run blast-radius
+
+2. **When creating new files**, note them in your summary:
+   - The post-commit hook will detect unregistered files and suggest registration
+   - Include the file paths in your output so the orchestrator can track them
+
+3. **Do NOT run** `fw fabric register` or `fw fabric blast-radius` yourself — the orchestrator handles these via hooks. Just report what you modified/created.
+
+## TermLink Workers — Different Output Rules
+
+TermLink workers (`fw termlink dispatch`) are NOT sub-agents. They run in
+independent processes with their own context budget. The `/tmp/` convention
+above does NOT apply to them — it exists to prevent context explosion in
+Task tool agents, which share the parent's context window.
+
+**For TermLink dispatch, the orchestrator MUST:**
+1. Specify the **target output path** in the dispatch prompt (e.g., `docs/reports/T-816-analysis.md`)
+2. NOT include the `/tmp/fw-agent-*` instruction — use the target file directly
+3. Instruct the worker to write output to the target file in the git repo
+
+**Why this matters (T-818):** If the parent session hits budget critical before
+integrating worker results, outputs in `/tmp/` are lost. T-816 incident: a
+TermLink worker wrote 307 lines to `/tmp/fw-agent-T-816-*.md` but the parent
+couldn't copy it to `docs/reports/` because the budget gate blocked Write.
+Had the worker written directly to `docs/reports/`, the output would have
+survived regardless of parent session state.
+
+**TermLink dispatch prompt template:**
+```
+Write your analysis directly to: docs/reports/T-XXX-topic.md
+Do NOT write to /tmp/. Your output must be in the git repo.
+When done, your final message should be ≤ 5 lines:
+  DONE
+  docs/reports/T-XXX-topic.md
+  One-sentence summary
+```
+
+### Commit the post-transition diff (L-419, T-1985 + T-1951 origin)
+
+If your worker's final action is `bin/fw task update T-XXX --status work-completed`,
+that transition rewrites task frontmatter (status, owner, date_finished, last_update)
+— and the worker exits before committing it. The parent then has to sweep stranded
+deltas across `.tasks/active/T-XXX-*.md`.
+
+**Worker exit protocol:** after the transition succeeds, the very next action MUST be:
+
+```bash
+bin/fw task update T-XXX --status work-completed && \
+  git add .tasks/active/T-XXX-*.md && \
+  FW_SWITCH_FOCUS=1 bin/fw git commit -m "T-XXX: work-completed transition"
+```
+
+**If you are running inside a linked worktree, this commit will be REFUSED** — and
+correctly so. The task corpus is a registry with global invariants; a worktree holds
+a read-only *replica* of it, and a `.tasks/` commit from a replica is how T-2505,
+T-2506 and T-2428 were each minted twice (T-3110, R7 in
+`docs/design/task-corpus-concurrency-model.md`). The refusal is the gate working, not
+a bug to route around.
+
+Do this instead — stage and commit the corpus delta **at the authority**, which the
+block message names for you:
+
+```bash
+AUTH=$(git rev-parse --path-format=absolute --git-common-dir)/..
+git -C "$AUTH" add .tasks/active/T-XXX-*.md && \
+  FW_SWITCH_FOCUS=1 git -C "$AUTH" commit -m "T-XXX: work-completed transition"
+```
+
+Your *source* commits are unaffected — commit those from the worktree exactly as
+before, then `fw integrate` as normal. Only `.tasks/` is guarded.
+
+`FW_ALLOW_WORKTREE_CORPUS_COMMIT=1` exists as a last resort and writes a Tier-2 entry
+to the bypass log. Reach for the authority-side commit first; a bypass here recreates
+the divergence the gate exists to prevent.
+
+Origin: T-1985 (G-066 prong 2 worker) and T-1951 (G-066 prong 3 worker) both shipped
+clean slice commits, ran the transition, then exited — leaving the frontmatter
+delta uncommitted. The pattern will recur across every TermLink-dispatched worker
+that completes a task in its own session.
+
+## TermLink Dispatch — Orchestrator-Aware Workers (T-1643)
+
+When you dispatch via `fw termlink dispatch`, the framework now understands
+the orchestrator substrate built in T-1061. Three things to know:
+
+### 1. Pass `--task-type` (or rely on auto-derivation)
+
+The dispatcher accepts `--task-type build|inception|design|test|refactor|...`.
+If omitted, it auto-derives from `.context/working/focus.yaml` → active task's
+`workflow_type`. The worker's `meta.json` records `task_type` for downstream
+routing and audit.
+
+**Tag specialist sessions explicitly:** when spawning a long-lived worker that
+will handle a specific task class, pass `--task-type` so `termlink discover
+--tag task-type:build` can find it. The orchestrator (in /opt/termlink) uses
+this tag to route work to the right specialist.
+
+### 2. Check `model_used` and `fallback_used` in the result manifest
+
+After `fw termlink result <name>` returns, inspect the result manifest:
+
+- `model_used` — actual LLM the worker ran with (may differ from `--model`
+  if the orchestrator chose a different specialist)
+- `fallback_used` — `true` if the requested specialist was unavailable and
+  the orchestrator routed to a fallback
+
+If `fallback_used` is `true`, surface it to the user — the answer came from
+a different model than asked. Don't silently treat it as if the original
+specialist responded.
+
+### 3. Don't bypass the orchestrator on principle
+
+The whole point of T-1061 was to let the orchestrator make routing decisions
+the framework can't. If you find yourself thinking "I'll just dispatch with
+`--model haiku` directly to bypass routing", check first whether a
+`task-type:X` derivation would route correctly — that's the substrate
+working as designed.
+
+## Why This Exists
+
+- T-073: 9 agents returned full YAML → 177K token spike → session crash
+- Multiple sessions lost to context explosion from agent result ingestion
+- The `fw bus` system was built for this but goes unused without this preamble
+
+## Orchestrator-Side Rules
+
+After dispatching agents:
+1. Use `run_in_background: true` for any agent expected to produce >500 tokens
+2. Read only the final summary from the agent (last 5 lines of output)
+3. If you need details, read the output file the agent wrote — don't ask the agent
+4. NEVER use `TaskOutput` with `block: true` for background agents (returns full JSONL transcript)
+5. Use `Bash: tail -5 /tmp/claude-*/tasks/{agent-id}.output` to get just the summary
+
+## Yield Point — Cooperative Poll (T-2338, arc-011 M1 §2)
+
+When two agents are dispatched in parallel against tasks with declared-disjoint
+write-sets (validated pre-flight by `fw write-set check`, T-2337), the orchestrator
+needs a mid-flight safety net for the case where reality drifts from the declaration
+— a glob that expands unexpectedly, a task that touches a file outside its declared
+set, etc.
+
+The single-host mechanism is a file flag at `.context/working/.dispatch-flag`:
+
+```
+refuse-write:/abs/path/to/conflicting-file
+refuse-write:/another/path
+# lines starting with # are comments
+```
+
+**Worker contract.** Dispatched workers MUST invoke
+`agents/dispatch/yield-point.sh check <target_path>` immediately before each
+`Write` or `Edit` tool call (single-host dispatches only — multi-host arc M2
+introduces a sidecar). Exit-code semantics:
+
+| Exit | Meaning | Worker action |
+|------|---------|---------------|
+| 0    | Write allowed (no flag, no match, stale flag, malformed flag) | Proceed |
+| 1    | Write refused (rule matched the target path) | Skip write, log refusal, post outcome row, exit cleanly |
+| 64   | Usage error (no target path) | Bug in worker — fix the invocation |
+
+**Stale-flag protection.** Flag mtime older than `FW_YIELD_STALE_SECS` (default
+300s) is ignored with a WARN — the orchestrator was meant to clean up and didn't,
+and we fail open rather than deadlock.
+
+**Orchestrator contract.** When the orchestrator detects a collision (post-flight
+audit, or runtime intelligence not yet built), it writes the flag, waits one
+worker poll-cycle, then expects the affected worker to post a refusal outcome.
+The orchestrator then either re-dispatches with adjusted scope or escalates.
+
+**Fail-open by design.** A broken orchestrator signal must NEVER deadlock workers.
+Any parse error / malformed content / stale flag → write allowed. The disjoint
+write-set declaration (T-2337) is the primary correctness barrier; this is a
+real-time safety supplement.

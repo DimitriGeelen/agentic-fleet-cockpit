@@ -1,0 +1,57 @@
+# ask
+
+> fw ask subcommand. Provides interactive question/answer prompts for framework configuration and user input collection.
+
+**Type:** script | **Subsystem:** framework-core | **Location:** `lib/ask.sh`
+
+**Tags:** `lib`, `fw-subcommand`, `interactive`
+
+## What It Does
+
+fw ask — synchronous RAG+LLM wrapper (T-264)
+Usage:
+fw ask "How do I create a task?"
+fw ask --json "What is the healing loop?"
+fw ask --concise "List enforcement tiers"
+fw ask --think "Why does the healing agent fail?"
+
+### Framework Reference
+
+### File Structure
+
+```
+.tasks/
+  active/      # In-progress tasks (e.g., T-042-add-oauth.md)
+  completed/   # Finished tasks
+  templates/   # Task templates by workflow type
+```
+
+### Task File Format
+
+Tasks are Markdown with YAML frontmatter. Use `default.md` as template.
+
+**Required frontmatter fields:**
+- `id`, `name`, `description`, `status`, `workflow_type`, `horizon`, `owner`, `created`, `last_update`
+
+*(truncated — see CLAUDE.md for full section)*
+
+## Dependencies (3)
+
+| Component | Relationship | Description |
+|-----------|--------------|-------------|
+| `?` | uses | — |
+| [paths](/docs/generated/lib-paths) | calls | Centralized path resolution for the framework. Sets FRAMEWORK_ROOT, PROJECT_ROOT, TASKS_DIR, CONTEXT_DIR. Replaces the 3-line SCRIPT_DIR/FRAMEWORK_ROOT/PROJECT_ROOT pattern previously duplicated across 25+ agent scripts. Also sources lib/compat.sh for cross-platform helpers. |
+| [ask-py](/docs/generated/lib-ask-py) | calls | Python implementation of fw ask subcommand (sibling of lib/ask.sh) |
+
+## Used By (4)
+
+| Component | Relationship | Description |
+|-----------|--------------|-------------|
+| [fw](/docs/generated/bin-fw) | called_by | Single entry point for all framework operations. Reads .framework.yaml from the project directory to resolve FRAMEWORK_ROOT, then routes commands to the appropriate agent. Supports both in-repo and shared tooling modes. |
+| [lib_ask](/docs/generated/tests-unit-lib_ask) | tested_by | Unit tests for lib/ask.sh (5 tests) |
+| [lib_ask](/docs/generated/tests-unit-lib_ask) | called_by | Unit tests for lib/ask.sh (5 tests) |
+| [lib_ask](/docs/generated/tests-unit-lib_ask) | tests_by | Unit tests for lib/ask.sh (5 tests) |
+
+---
+*Auto-generated from Component Fabric. Card: `lib-ask.yaml`*
+*Last verified: 2026-03-04*

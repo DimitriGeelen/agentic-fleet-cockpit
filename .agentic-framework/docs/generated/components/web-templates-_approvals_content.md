@@ -1,0 +1,25 @@
+# _approvals_content
+
+> htmx partial: approvals content fragment — task list with AC checkboxes, loaded by htmx swap into approvals page.
+
+**Type:** fragment | **Subsystem:** watchtower | **Location:** `web/templates/_approvals_content.html`
+
+## What It Does
+
+## Used By (2)
+
+| Component | Relationship | Description |
+|-----------|--------------|-------------|
+| [approvals](/docs/generated/web-templates-approvals) | included_by | Full page template: approvals queue — wrapper around _approvals_content partial with nav, filters, bulk actions. |
+| [test_approvals_content_tokens](/docs/generated/tests-unit-test_approvals_content_tokens) | called_by | TODO: describe what this component does |
+
+## Related
+
+### Tasks
+- T-839: Watchtower approvals page improvements — filtering, sorting, RUBBER-STAMP highlighting
+- T-846: Watchtower /approvals — add 'Complete All Ready' batch action for tasks with all ACs checked
+- T-881: Upgrade consumer projects with T-879 xargs fix and T-880 init improvements
+
+---
+*Auto-generated from Component Fabric. Card: `web-templates-_approvals_content.yaml`*
+*Last verified: 2026-03-28*

@@ -1,0 +1,35 @@
+# claude-fw
+
+> Claude Code wrapper with auto-restart support. Runs claude normally, then checks for a restart signal file written by checkpoint.sh when auto-handover fires at critical budget. If found and fresh, auto-restarts with claude -c to continue seamlessly.
+
+**Type:** script | **Subsystem:** framework-core | **Location:** `bin/claude-fw`
+
+## What It Does
+
+claude-fw — Claude Code wrapper with auto-restart support
+Runs claude normally, then checks for a restart signal file
+written by checkpoint.sh when auto-handover fires at critical budget.
+If found (and fresh), auto-restarts with `claude -c` to continue.
+Usage:
+claude-fw [claude-args...]          # Run with auto-restart enabled
+claude-fw --no-restart [args...]    # Run without auto-restart
+claude-fw --termlink [args...]      # Register as TermLink session for remote access
+TL_CLAUDE_ENABLED=1 claude-fw      # Same via env var
+The restart signal file is .context/working/.restart-requested
+
+## Dependencies (1)
+
+| Component | Relationship | Description |
+|-----------|--------------|-------------|
+| [checkpoint](/docs/generated/checkpoint) | reads | Post-tool budget monitoring. Warns at thresholds, auto-triggers handover at critical, detects compaction, manages inception checkpoints. — _Reads .context/working/.restart-requested signal file written by checkpoint.sh_ |
+
+## Used By (2)
+
+| Component | Relationship | Description |
+|-----------|--------------|-------------|
+| [claude-fw-router](/docs/generated/bin-claude-fw-router) | triggers_by | The `claude-fw` entry point installed onto PATH. Walks up from cwd to find the current project (framework repo or vendored consumer, same predicate as bin/fw-router) and execs THAT project's own bin/claude-fw. Replaces a fixed copy of the wrapper's logic that install.sh used to put on PATH — a fixed copy runs the same bytes regardless of which project you're standing in, which is the global-install problem wearing a different name (T-2854). Falls back to plain `claude` when no project is found or the resolved project has no claude-fw sibling. |
+| [t3213_start_event_confirmation](/docs/generated/tests-unit-t3213_start_event_confirmation) | tests_by | End-to-end confirmation suite for the claude-fw start-event ledger: runs the real bin/claude-fw in a scratch git repo with a stubbed claude binary and asserts the start event is written, is idempotent, and degrades correctly when the ledger path is unwritable. |
+
+---
+*Auto-generated from Component Fabric. Card: `bin-claude-fw.yaml`*
+*Last verified: 2026-03-01*
