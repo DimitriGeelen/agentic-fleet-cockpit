@@ -13,7 +13,7 @@ tags: [onboarding]
 components: []
 related_tasks: []
 created: 2026-09-08T18:03:51Z
-last_update: 2026-09-08T18:03:51Z
+last_update: 2026-09-08T18:08:20Z
 date_finished: null
 ---
 
