@@ -1,0 +1,129 @@
+# Reviewer feedback stream (T-1443 v1.0, Spike I)
+# Append-only. Events separated by ---.
+# Schema: kind, timestamp, scan_id, task_id, payload
+---
+kind: scan_emitted
+timestamp: '2026-09-08T19:16:31Z'
+scan_id: R-517e8ed0
+task_id: T-001
+payload:
+  overall: PASS
+  finding_count: 0
+  suppressed_count: 0
+  auto_ticked_count: 0
+  catalogue_version: v1.3-seed
+---
+kind: verdict_recorded
+timestamp: '2026-09-08T19:16:31Z'
+scan_id: R-517e8ed0
+task_id: T-001
+payload:
+  task_file: .tasks/active/T-001-orientation-and-framework-health.md
+---
+kind: scan_emitted
+timestamp: '2026-09-08T19:17:06Z'
+scan_id: R-979c0b96
+task_id: T-002
+payload:
+  overall: PASS
+  finding_count: 0
+  suppressed_count: 0
+  auto_ticked_count: 0
+  catalogue_version: v1.3-seed
+---
+kind: verdict_recorded
+timestamp: '2026-09-08T19:17:06Z'
+scan_id: R-979c0b96
+task_id: T-002
+payload:
+  task_file: .tasks/active/T-002-first-governed-commit.md
+---
+kind: scan_emitted
+timestamp: '2026-09-08T19:18:54Z'
+scan_id: R-19384475
+task_id: T-003
+payload:
+  overall: PASS
+  finding_count: 0
+  suppressed_count: 0
+  auto_ticked_count: 0
+  catalogue_version: v1.3-seed
+---
+kind: verdict_recorded
+timestamp: '2026-09-08T19:18:54Z'
+scan_id: R-19384475
+task_id: T-003
+payload:
+  task_file: .tasks/active/T-003-register-key-components.md
+---
+kind: scan_emitted
+timestamp: '2026-09-08T19:19:41Z'
+scan_id: R-9e5f20c7
+task_id: T-007
+payload:
+  overall: PASS
+  finding_count: 0
+  suppressed_count: 0
+  auto_ticked_count: 0
+  catalogue_version: v1.3-seed
+---
+kind: verdict_recorded
+timestamp: '2026-09-08T19:19:41Z'
+scan_id: R-9e5f20c7
+task_id: T-007
+payload:
+  task_file: .tasks/active/T-007-add-smoke-test-script-verifying-cockpit-.md
+---
+kind: scan_emitted
+timestamp: '2026-09-08T19:20:00Z'
+scan_id: R-0c964e8e
+task_id: T-004
+payload:
+  overall: CONCERN
+  finding_count: 1
+  suppressed_count: 0
+  auto_ticked_count: 0
+  catalogue_version: v1.3-seed
+---
+kind: verdict_recorded
+timestamp: '2026-09-08T19:20:00Z'
+scan_id: R-0c964e8e
+task_id: T-004
+payload:
+  task_file: .tasks/active/T-004-complete-task-lifecycle.md
+---
+kind: scan_emitted
+timestamp: '2026-09-08T19:20:31Z'
+scan_id: R-b174c56c
+task_id: T-005
+payload:
+  overall: PASS
+  finding_count: 0
+  suppressed_count: 0
+  auto_ticked_count: 0
+  catalogue_version: v1.3-seed
+---
+kind: verdict_recorded
+timestamp: '2026-09-08T19:20:31Z'
+scan_id: R-b174c56c
+task_id: T-005
+payload:
+  task_file: .tasks/active/T-005-generate-first-handover.md
+---
+kind: scan_emitted
+timestamp: '2026-09-08T19:20:54Z'
+scan_id: R-deaad071
+task_id: T-006
+payload:
+  overall: PASS
+  finding_count: 0
+  suppressed_count: 0
+  auto_ticked_count: 0
+  catalogue_version: v1.3-seed
+---
+kind: verdict_recorded
+timestamp: '2026-09-08T19:20:54Z'
+scan_id: R-deaad071
+task_id: T-006
+payload:
+  task_file: .tasks/active/T-006-add-project-learning.md

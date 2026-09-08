@@ -1,0 +1,24 @@
+id: cockpit-server.py
+name: cockpit-server
+type: service
+subsystem: cockpit
+location: cockpit-server.py
+tags:
+- http
+- api
+- fleet
+purpose: 'Stdlib-only HTTP server on 127.0.0.1:8090: serves index.html at /, exposes /api/claude/{fleet,config,start,stop}.
+  Refuses fleet API off-loopback (no auth exists). Reads/writes fleet.json atomically; shells out to claude-fleet-start.sh
+  and tmux.'
+depends_on:
+- target: index.html
+  type: renders
+- target: fleet.json
+  type: writes
+- target: scripts/claude-fleet-start.sh
+  type: calls
+depended_by:
+- target: agentic-fleet-cockpit.service
+  type: triggers
+last_verified: '2026-09-08'
+created_by: T-003

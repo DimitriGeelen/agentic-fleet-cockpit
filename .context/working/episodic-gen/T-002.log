@@ -1,0 +1,21 @@
+=== episodic-gen invocation: 2026-09-08T19:17:07Z ===
+task_id: T-002
+FRAMEWORK_ROOT: /opt/055-agentic-fleet-cockpit/.agentic-framework
+PROJECT_ROOT: /opt/055-agentic-fleet-cockpit
+CONTEXT_DIR: /opt/055-agentic-fleet-cockpit/.context
+CONTEXT_AGENT: /opt/055-agentic-fleet-cockpit/.agentic-framework/agents/context/context.sh
+cwd: /opt/055-agentic-fleet-cockpit
+--- context.sh output ---
+Episodic generated: /opt/055-agentic-fleet-cockpit/.context/episodic/T-002.yaml
+
+  Status: ✓ auto-complete (Auto-generated)
+  Task: First governed commit for 055-agentic-fleet-cockpit
+  Duration: 0 days (73 min)
+  Updates: 2
+  Commits: 2
+  Lines: +417020 -1 across 2911 files
+  Outcomes: 3 AC checked
+  Artifacts: 2911 files tracked
+
+Source: /opt/055-agentic-fleet-cockpit/.tasks/completed/T-002-first-governed-commit.md
+--- exit code: 0 ---

@@ -1,0 +1,20 @@
+=== episodic-gen invocation: 2026-09-08T19:20:55Z ===
+task_id: T-006
+FRAMEWORK_ROOT: /opt/055-agentic-fleet-cockpit/.agentic-framework
+PROJECT_ROOT: /opt/055-agentic-fleet-cockpit
+CONTEXT_DIR: /opt/055-agentic-fleet-cockpit/.context
+CONTEXT_AGENT: /opt/055-agentic-fleet-cockpit/.agentic-framework/agents/context/context.sh
+cwd: /opt/055-agentic-fleet-cockpit
+--- context.sh output ---
+Episodic generated: /opt/055-agentic-fleet-cockpit/.context/episodic/T-006.yaml
+
+  Status: ✓ auto-complete (Auto-generated)
+  Task: Record first project learning for 055-agentic-fleet-cockpit
+  Duration: 0 days (77 min)
+  Updates: 2
+  Commits: 0
+  Lines: +0 -0 across 0 files
+  Outcomes: 3 AC checked
+
+Source: /opt/055-agentic-fleet-cockpit/.tasks/completed/T-006-add-project-learning.md
+--- exit code: 0 ---

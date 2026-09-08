@@ -1,0 +1,74 @@
+# ============================================================================
+# EPISODIC MEMORY - T-001: Orientation: understand 055-agentic-fleet-cockpit and verify framework health
+# ============================================================================
+# STATUS: AUTO-GENERATED
+# Hybrid episodic: git-mined timeline/metrics + task-file decisions/AC.
+# Generated: 2026-09-08T19:16:32Z
+# ============================================================================
+
+task_id: T-001
+task_name: "Orientation: understand 055-agentic-fleet-cockpit and verify framework health"
+workflow_type: build
+enrichment_status: auto-complete  # Mechanical task — AC checked, no decisions to record
+
+# Timeline
+created: 2026-09-08T18:03:51Z
+completed: 2026-09-08T19:15:52Z
+duration_days: 0
+updates_count: 2
+
+# Summary (auto-generated from git commit messages)
+summary: |
+  Read project files, understand the tech stack, and verify the framework is properly installed. This is the first task — it establishes context for all subsequent work.
+
+# Key outcomes
+outcomes:
+  - 'Read README and understand project purpose, tech stack, entry points'
+  - 'Run `fw doctor` — all checks pass'
+  - 'Run `fw audit` — note current pass/warn/fail counts as baseline'
+  - 'Install git hooks: `fw git install-hooks` (already installed, v1.15)'
+
+# Challenges (auto-detected from git: commits with fix/revert/bug/error)
+challenges:
+  # No challenges detected in commit messages
+
+# Decisions (from task file Decisions section)
+decisions:
+  # No decisions recorded (mechanical task or old template)
+
+# Artifacts (auto-mined from git --name-only)
+artifacts:
+  # No artifacts found in git
+
+# Timeline (auto-mined from git log)
+git_timeline:
+  # No git timeline available
+
+# What worked well (requires judgment — [TODO] if enrichment_status is pending)
+successes:
+  # Completed successfully in 0 commit(s), 72 min
+
+# Related tasks
+related_tasks:
+  blocked: []
+  absorbed: []
+  spawned: []
+
+# Tags for retrieval
+tags: [onboarding]
+
+# Passive metrics (derived automatically — do not edit)
+metrics:
+  # git_mining: ok = the four counters below are measurements.
+  #             skipped = git could not be reached from PROJECT_ROOT; the
+  #             counters are null (absent measurement), NOT zero (T-3129).
+  git_mining: ok
+  wall_clock_minutes: 72
+  commits: 0
+  files_changed: 0
+  lines_added: 0
+  lines_removed: 0
+
+# Metadata
+source_file: /opt/055-agentic-fleet-cockpit/.tasks/completed/T-001-orientation-and-framework-health.md
+generated_by: context-agent-hybrid

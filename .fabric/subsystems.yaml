@@ -1,0 +1,41 @@
+subsystems:
+  - id: cockpit
+    name: Cockpit web UI + API
+    purpose: Localhost control panel for the claude-fw tmux fleet
+    summary: >-
+      cockpit-server.py serves index.html and the /api/claude/* endpoints on
+      127.0.0.1:8090 and persists the human's per-project selection in
+      fleet.json. No auth exists, so the fleet API refuses to serve
+      off-loopback.
+    components:
+      - cockpit-server.py
+      - index.html
+      - fleet.json
+    entry_points:
+      - cockpit-server.py
+  - id: fleet
+    name: Fleet spawn/attach machinery
+    purpose: Spawn, list and attach fleet-<dirname> tmux sessions on the root tmux server
+    summary: >-
+      claude-fleet-start.sh spawns sessions at boot (all enabled projects) or
+      one project when called by the start API, encoding the T-041 spike
+      constraints. claude-fleet-attach.sh opens terminals at XFCE login; cs is
+      the CLI view.
+    components:
+      - scripts/claude-fleet-start.sh
+      - scripts/claude-fleet-attach.sh
+      - scripts/cs
+    entry_points:
+      - scripts/claude-fleet-start.sh
+  - id: deploy
+    name: Install + service wiring
+    purpose: Get the cockpit running at boot as a systemd service
+    summary: >-
+      agentic-fleet-cockpit.service runs the server and owns the boot fleet
+      spawn via ExecStartPost; scripts/install.sh copy-on-change installs the
+      unit and the cs CLI.
+    components:
+      - agentic-fleet-cockpit.service
+      - scripts/install.sh
+    entry_points:
+      - scripts/install.sh

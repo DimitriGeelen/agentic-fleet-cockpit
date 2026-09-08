@@ -1,0 +1,25 @@
+id: scripts/claude-fleet-start.sh
+name: claude-fleet-start
+type: script
+subsystem: fleet
+location: scripts/claude-fleet-start.sh
+tags:
+- tmux
+- boot
+- spawner
+purpose: 'Boot starter: spawns fleet-<dirname> tmux sessions on the ROOT tmux server running claude-fw
+  -c, with fresh-session fallback. T-041 constraints: sanitized env -i, never pipe claude stdout, idempotent,
+  tmux server-access -a dimitri-mint-dev. Also heals the autostart .desktop entry each boot. With a path
+  arg starts one project (used by the start API).'
+depends_on:
+- target: fleet.json
+  type: reads
+- target: scripts/claude-fleet-attach.desktop
+  type: writes
+depended_by:
+- target: agentic-fleet-cockpit.service
+  type: triggers
+- target: cockpit-server.py
+  type: calls
+last_verified: '2026-09-08'
+created_by: T-003

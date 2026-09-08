@@ -5,16 +5,34 @@ description: >
   Make a small change (fix a typo, update a comment, add a .gitignore entry) and commit
   it using the framework's git agent. This validates the full commit flow: task reference,
   commit-msg hook, post-commit advisory.
-status: captured
+status: work-completed
 workflow_type: build
 owner: agent
-horizon: now
+horizon: null
 tags: [onboarding]
 components: []
 related_tasks: []
 created: 2026-09-08T18:03:51Z
-last_update: 2026-09-08T18:08:20Z
-date_finished: null
+last_update: 2026-09-08T19:17:05Z
+date_finished: 2026-09-08T19:17:05Z
+bvp_scores_proposed:
+  - ts: '2026-09-08T19:16:42Z'
+    estimator: bvp-estimator-v1-heuristic
+    scores:
+      D1: 2
+      D2: 0
+      D3: 0
+      D4: 0
+      F-RECALL: 1
+      F-AUTONOMY: 0
+      F3: 0
+      F1: 0
+      F2: 0
+    rationale: D1=2 (body:learning-ref,body:concern-ref); D2=0 (no-signal); D3=0
+      (no-signal); D4=0 (no-signal); F-RECALL=1 (body:episodic-only); 
+      F-AUTONOMY=0 (no-signal); F3=0 (no-signal); F1=0 (no-signal); F2=0 
+      (no-signal)
+    rubric_sha: e4a00f38e801
 ---
 
 # T-002: First governed commit for 055-agentic-fleet-cockpit
@@ -46,9 +64,9 @@ which gates guard each transition.
 ## Acceptance Criteria
 
 ### Agent
-- [ ] Make a small, safe change to 055-agentic-fleet-cockpit (typo fix, comment, .gitignore)
-- [ ] Commit using `fw git commit -m "T-002: description"`
-- [ ] Commit succeeds (hook validates T-002 reference)
+- [x] Make a small, safe change to 055-agentic-fleet-cockpit (typo fix, comment, .gitignore) — added transient ignores to .gitignore
+- [x] Commit using `fw git commit -m "T-002: description"` — eb72330, 8387971
+- [x] Commit succeeds (hook validates T-002 reference)
 
 ## Verification
 
@@ -81,3 +99,23 @@ which gates guard each transition.
 # task". A bare -n test cannot express it: it only asks whether anything
 # printed at all.
 s=$(git log --grep='^T-002:' -1 --format=%s); [ "${s%%:*}" = "T-002" ]
+
+## Updates
+
+### 2026-09-08T19:16:42Z — status-update [task-update-agent]
+- **Change:** status: captured → started-work
+
+### 2026-09-08T20:16:00Z — completed [agent]
+- **Action:** Governed commits eb72330 (framework vendor + .gitignore transient entries) and 8387971 landed via `fw git commit`; commit-msg hook validated the T-002 prefix.
+
+## Reviewer Verdict (v1.5)
+
+- **Scan ID:** R-979c0b96
+- **Timestamp:** 2026-09-08T19:17:06Z
+- **Catalogue:** v1.3-seed
+- **Overall:** PASS
+- **Needs Human:** no
+- **Findings:** none
+
+### 2026-09-08T19:17:05Z — status-update [task-update-agent]
+- **Change:** status: started-work → work-completed

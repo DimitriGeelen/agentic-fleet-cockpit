@@ -4,16 +4,16 @@ name: "Orientation: understand 055-agentic-fleet-cockpit and verify framework he
 description: >
   Read project files, understand the tech stack, and verify the framework is properly
   installed. This is the first task — it establishes context for all subsequent work.
-status: started-work
+status: work-completed
 workflow_type: build
 owner: agent
-horizon: now
+horizon: null
 tags: [onboarding]
 components: []
 related_tasks: []
 created: 2026-09-08T18:03:51Z
-last_update: 2026-09-08T18:03:51Z
-date_finished: null
+last_update: 2026-09-08T19:15:52Z
+date_finished: 2026-09-08T19:15:52Z
 ---
 
 # T-001: Orientation — understand 055-agentic-fleet-cockpit and verify framework health
@@ -50,10 +50,10 @@ step and why none of it waits for you.
 ## Acceptance Criteria
 
 ### Agent
-- [ ] Read README and understand project purpose, tech stack, entry points
-- [ ] Run `fw doctor` — all checks pass
-- [ ] Run `fw audit` — note current pass/warn/fail counts as baseline
-- [ ] Install git hooks: `fw git install-hooks`
+- [x] Read README and understand project purpose, tech stack, entry points
+- [x] Run `fw doctor` — all checks pass
+- [x] Run `fw audit` — note current pass/warn/fail counts as baseline
+- [x] Install git hooks: `fw git install-hooks` (already installed, v1.15)
 
 ## Verification
 
@@ -65,3 +65,19 @@ fw audit; test $? -le 1
 
 ### 2026-09-08T18:03:51Z — task-created [fw-init]
 - **Action:** Auto-created by `fw init` (existing-project onboarding)
+
+### 2026-09-08T20:15:00Z — orientation-complete [agent]
+- **Action:** Read README/cockpit-server.py/scripts; project = localhost web UI (127.0.0.1:8090) controlling claude-fw tmux fleet sessions. Entry points: cockpit-server.py (stdlib HTTP server), index.html (single-file UI), scripts/claude-fleet-start.sh (boot spawner), scripts/cs (CLI).
+- **Baseline:** fw audit: Pass 70 / Warn 24 / Fail 0 (exit 1, warnings expected on fresh install). fw doctor: all checks OK.
+
+## Reviewer Verdict (v1.5)
+
+- **Scan ID:** R-517e8ed0
+- **Timestamp:** 2026-09-08T19:16:31Z
+- **Catalogue:** v1.3-seed
+- **Overall:** PASS
+- **Needs Human:** no
+- **Findings:** none
+
+### 2026-09-08T19:15:52Z — status-update [task-update-agent]
+- **Change:** status: started-work → work-completed

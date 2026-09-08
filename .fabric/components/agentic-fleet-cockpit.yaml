@@ -1,0 +1,20 @@
+id: agentic-fleet-cockpit.service
+name: agentic-fleet-cockpit
+type: config
+subsystem: deploy
+location: agentic-fleet-cockpit.service
+tags:
+- systemd
+- boot
+purpose: 'Systemd unit source: runs cockpit-server.py on 8090 and owns the boot fleet spawn via ExecStartPost=claude-fleet-start.sh.
+  Installed to /etc/systemd/system by scripts/install.sh.'
+depends_on:
+- target: cockpit-server.py
+  type: triggers
+- target: scripts/claude-fleet-start.sh
+  type: triggers
+depended_by:
+- target: scripts/install.sh
+  type: reads
+last_verified: '2026-09-08'
+created_by: T-003

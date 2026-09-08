@@ -1,0 +1,20 @@
+=== episodic-gen invocation: 2026-09-08T19:16:31Z ===
+task_id: T-001
+FRAMEWORK_ROOT: /opt/055-agentic-fleet-cockpit/.agentic-framework
+PROJECT_ROOT: /opt/055-agentic-fleet-cockpit
+CONTEXT_DIR: /opt/055-agentic-fleet-cockpit/.context
+CONTEXT_AGENT: /opt/055-agentic-fleet-cockpit/.agentic-framework/agents/context/context.sh
+cwd: /opt/055-agentic-fleet-cockpit
+--- context.sh output ---
+Episodic generated: /opt/055-agentic-fleet-cockpit/.context/episodic/T-001.yaml
+
+  Status: ✓ auto-complete (Auto-generated)
+  Task: Orientation: understand 055-agentic-fleet-cockpit and verify framework health
+  Duration: 0 days (72 min)
+  Updates: 2
+  Commits: 0
+  Lines: +0 -0 across 0 files
+  Outcomes: 4 AC checked
+
+Source: /opt/055-agentic-fleet-cockpit/.tasks/completed/T-001-orientation-and-framework-health.md
+--- exit code: 0 ---

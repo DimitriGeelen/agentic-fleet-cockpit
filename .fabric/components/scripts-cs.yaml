@@ -1,0 +1,15 @@
+id: scripts/cs
+name: cs
+type: script
+subsystem: fleet
+location: scripts/cs
+tags:
+- cli
+purpose: 'CLI helper installed at /usr/local/bin/cs: list fleet sessions on the root tmux server with
+  attach state, and attach to one.'
+depends_on: []
+depended_by:
+- target: scripts/install.sh
+  type: reads
+last_verified: '2026-09-08'
+created_by: T-003

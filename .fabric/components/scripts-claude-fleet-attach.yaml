@@ -1,0 +1,16 @@
+id: scripts/claude-fleet-attach.sh
+name: claude-fleet-attach
+type: script
+subsystem: fleet
+location: scripts/claude-fleet-attach.sh
+tags:
+- xfce
+- autostart
+purpose: 'XFCE login helper running as the desktop user: opens a terminal window per running, unattached
+  fleet session. Launched by the autostart .desktop entry that claude-fleet-start.sh installs/heals.'
+depends_on: []
+depended_by:
+- target: scripts/claude-fleet-start.sh
+  type: triggers
+last_verified: '2026-09-08'
+created_by: T-003

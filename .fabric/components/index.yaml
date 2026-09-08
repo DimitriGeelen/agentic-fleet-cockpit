@@ -1,0 +1,17 @@
+id: index.html
+name: index
+type: ui
+subsystem: cockpit
+location: index.html
+tags:
+- ui
+- single-file
+purpose: 'The cockpit UI: single HTML file with inline JS/CSS. Lists /opt projects with running/attached
+  state, per-project config toggles, start/stop buttons, attach command copy. Talks to /api/claude/* on
+  same origin.'
+depends_on:
+- target: cockpit-server.py
+  type: calls
+depended_by: []
+last_verified: '2026-09-08'
+created_by: T-003

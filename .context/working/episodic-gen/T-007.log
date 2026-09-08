@@ -1,0 +1,21 @@
+=== episodic-gen invocation: 2026-09-08T19:19:42Z ===
+task_id: T-007
+FRAMEWORK_ROOT: /opt/055-agentic-fleet-cockpit/.agentic-framework
+PROJECT_ROOT: /opt/055-agentic-fleet-cockpit
+CONTEXT_DIR: /opt/055-agentic-fleet-cockpit/.context
+CONTEXT_AGENT: /opt/055-agentic-fleet-cockpit/.agentic-framework/agents/context/context.sh
+cwd: /opt/055-agentic-fleet-cockpit
+--- context.sh output ---
+Episodic generated: /opt/055-agentic-fleet-cockpit/.context/episodic/T-007.yaml
+
+  Status: ✓ auto-complete (Auto-generated)
+  Task: Add smoke-test script verifying cockpit service, API and installed artifacts
+  Duration: 0 days (0 min)
+  Updates: 1
+  Commits: 1
+  Lines: +41 -0 across 3 files
+  Outcomes: 2 AC checked
+  Artifacts: 5 files tracked
+
+Source: /opt/055-agentic-fleet-cockpit/.tasks/completed/T-007-add-smoke-test-script-verifying-cockpit-.md
+--- exit code: 0 ---

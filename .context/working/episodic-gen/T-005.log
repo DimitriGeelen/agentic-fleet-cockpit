@@ -1,0 +1,21 @@
+=== episodic-gen invocation: 2026-09-08T19:20:32Z ===
+task_id: T-005
+FRAMEWORK_ROOT: /opt/055-agentic-fleet-cockpit/.agentic-framework
+PROJECT_ROOT: /opt/055-agentic-fleet-cockpit
+CONTEXT_DIR: /opt/055-agentic-fleet-cockpit/.context
+CONTEXT_AGENT: /opt/055-agentic-fleet-cockpit/.agentic-framework/agents/context/context.sh
+cwd: /opt/055-agentic-fleet-cockpit
+--- context.sh output ---
+Episodic generated: /opt/055-agentic-fleet-cockpit/.context/episodic/T-005.yaml
+
+  Status: ✓ auto-complete (Auto-generated)
+  Task: Generate first session handover for 055-agentic-fleet-cockpit
+  Duration: 0 days (76 min)
+  Updates: 2
+  Commits: 2
+  Lines: +233 -1 across 3 files
+  Outcomes: 3 AC checked
+  Artifacts: 3 files tracked
+
+Source: /opt/055-agentic-fleet-cockpit/.tasks/completed/T-005-generate-first-handover.md
+--- exit code: 0 ---

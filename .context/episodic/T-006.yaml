@@ -1,0 +1,73 @@
+# ============================================================================
+# EPISODIC MEMORY - T-006: Record first project learning for 055-agentic-fleet-cockpit
+# ============================================================================
+# STATUS: AUTO-GENERATED
+# Hybrid episodic: git-mined timeline/metrics + task-file decisions/AC.
+# Generated: 2026-09-08T19:20:55Z
+# ============================================================================
+
+task_id: T-006
+task_name: "Record first project learning for 055-agentic-fleet-cockpit"
+workflow_type: build
+enrichment_status: auto-complete  # Mechanical task — AC checked, no decisions to record
+
+# Timeline
+created: 2026-09-08T18:03:51Z
+completed: 2026-09-08T19:20:53Z
+duration_days: 0
+updates_count: 2
+
+# Summary (auto-generated from git commit messages)
+summary: |
+  Capture something learned during onboarding as the first project-specific learning. This validates the knowledge pipeline: learning → pattern → practice graduation.
+
+# Key outcomes
+outcomes:
+  - 'Identify something learned during T-001 through T-005'
+  - 'Record it: `fw context add-learning "description" --task T-006` — PL-001 (P-011 Updates-fence gotcha), PL-002 (bleeding-edge hook-template gap)'
+  - 'Verify it appears in `.context/project/learnings.yaml`'
+
+# Challenges (auto-detected from git: commits with fix/revert/bug/error)
+challenges:
+  # No challenges detected in commit messages
+
+# Decisions (from task file Decisions section)
+decisions:
+  # No decisions recorded (mechanical task or old template)
+
+# Artifacts (auto-mined from git --name-only)
+artifacts:
+  # No artifacts found in git
+
+# Timeline (auto-mined from git log)
+git_timeline:
+  # No git timeline available
+
+# What worked well (requires judgment — [TODO] if enrichment_status is pending)
+successes:
+  # Completed successfully in 0 commit(s), 77 min
+
+# Related tasks
+related_tasks:
+  blocked: []
+  absorbed: []
+  spawned: []
+
+# Tags for retrieval
+tags: [onboarding]
+
+# Passive metrics (derived automatically — do not edit)
+metrics:
+  # git_mining: ok = the four counters below are measurements.
+  #             skipped = git could not be reached from PROJECT_ROOT; the
+  #             counters are null (absent measurement), NOT zero (T-3129).
+  git_mining: ok
+  wall_clock_minutes: 77
+  commits: 0
+  files_changed: 0
+  lines_added: 0
+  lines_removed: 0
+
+# Metadata
+source_file: /opt/055-agentic-fleet-cockpit/.tasks/completed/T-006-add-project-learning.md
+generated_by: context-agent-hybrid

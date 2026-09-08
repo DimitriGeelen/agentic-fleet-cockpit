@@ -1,0 +1,17 @@
+id: scripts/install.sh
+name: install
+type: script
+subsystem: deploy
+location: scripts/install.sh
+tags:
+- installer
+purpose: Copy-on-change installer (T-603 Option F pattern) for the systemd unit and the cs CLI. Run after
+  changing unit, server, or cs; then systemctl restart agentic-fleet-cockpit.
+depends_on:
+- target: agentic-fleet-cockpit.service
+  type: reads
+- target: scripts/cs
+  type: reads
+depended_by: []
+last_verified: '2026-09-08'
+created_by: T-003

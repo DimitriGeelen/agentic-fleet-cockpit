@@ -1,0 +1,19 @@
+id: fleet.json
+name: fleet
+type: config
+subsystem: cockpit
+location: fleet.json
+tags:
+- config
+- persistence
+purpose: Persisted per-project fleet config (enabled, termlink, autorestart, resume_mode, autonomous).
+  The human's saved selection; written atomically (tmp + os.replace) by cockpit-server.py; read by claude-fleet-start.sh
+  at boot to decide what to spawn.
+depends_on: []
+depended_by:
+- target: cockpit-server.py
+  type: writes
+- target: scripts/claude-fleet-start.sh
+  type: reads
+last_verified: '2026-09-08'
+created_by: T-003

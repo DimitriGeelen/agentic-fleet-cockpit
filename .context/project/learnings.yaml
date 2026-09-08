@@ -1,3 +1,15 @@
 # Project Learnings - Knowledge gained during development
 # Added via: fw context add-learning "description" --task T-XXX
 learnings:
+- id: PL-001
+  learning: "Task files created by fw init lack an '## Updates' heading, and fw work-on/handover append status lines to end-of-file — those lines land inside '## Verification', which P-011 executes line-by-line as shell and then BLOCKs completion. Always insert an '## Updates' heading after the Verification commands before appending notes."
+  source: unknown
+  task: T-006
+  date: 2026-09-08
+  context: Added via context agent
+- id: PL-002
+  learning: "fw upgrade from bleeding-edge (1.6.768) exits PARTIAL: settings template cannot generate 2 hooks (Stop:stop-driver.sh, PreToolUse:check-worktree-governance-write). Framework-side gap — fix the template, never hand-patch consumer .claude/settings.json."
+  source: unknown
+  task: T-006
+  date: 2026-09-08
+  context: Added via context agent

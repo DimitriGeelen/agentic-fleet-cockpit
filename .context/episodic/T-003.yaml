@@ -1,0 +1,74 @@
+# ============================================================================
+# EPISODIC MEMORY - T-003: Register key components of 055-agentic-fleet-cockpit in fabric
+# ============================================================================
+# STATUS: AUTO-GENERATED
+# Hybrid episodic: git-mined timeline/metrics + task-file decisions/AC.
+# Generated: 2026-09-08T19:18:55Z
+# ============================================================================
+
+task_id: T-003
+task_name: "Register key components of 055-agentic-fleet-cockpit in fabric"
+workflow_type: build
+enrichment_status: auto-complete  # Mechanical task — AC checked, no decisions to record
+
+# Timeline
+created: 2026-09-08T18:03:51Z
+completed: 2026-09-08T19:18:53Z
+duration_days: 0
+updates_count: 2
+
+# Summary (auto-generated from git commit messages)
+summary: |
+  Use fw fabric register to map the most important source files and their dependencies. This creates the structural topology map for impact analysis and onboarding.
+
+# Key outcomes
+outcomes:
+  - 'Identify 5-10 key source files (entry points, core modules, config) — 8 registered'
+  - 'Register each with `fw fabric register <path>` — cards enriched with purpose + 18 dependency edges'
+  - 'Run `fw fabric overview` — shows registered components (3 subsystems: cockpit, fleet, deploy)'
+  - 'Run `fw fabric drift` — no critical drift (unregistered 0, orphaned 0, stale 0)'
+
+# Challenges (auto-detected from git: commits with fix/revert/bug/error)
+challenges:
+  # No challenges detected in commit messages
+
+# Decisions (from task file Decisions section)
+decisions:
+  # No decisions recorded (mechanical task or old template)
+
+# Artifacts (auto-mined from git --name-only)
+artifacts:
+  # No artifacts found in git
+
+# Timeline (auto-mined from git log)
+git_timeline:
+  # No git timeline available
+
+# What worked well (requires judgment — [TODO] if enrichment_status is pending)
+successes:
+  # Completed successfully in 0 commit(s), 75 min
+
+# Related tasks
+related_tasks:
+  blocked: []
+  absorbed: []
+  spawned: []
+
+# Tags for retrieval
+tags: [onboarding]
+
+# Passive metrics (derived automatically — do not edit)
+metrics:
+  # git_mining: ok = the four counters below are measurements.
+  #             skipped = git could not be reached from PROJECT_ROOT; the
+  #             counters are null (absent measurement), NOT zero (T-3129).
+  git_mining: ok
+  wall_clock_minutes: 75
+  commits: 0
+  files_changed: 0
+  lines_added: 0
+  lines_removed: 0
+
+# Metadata
+source_file: /opt/055-agentic-fleet-cockpit/.tasks/completed/T-003-register-key-components.md
+generated_by: context-agent-hybrid
